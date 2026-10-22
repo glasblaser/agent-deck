@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self'" />
+  <title>Agent Deck</title>
+  <link rel="stylesheet" href="/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <aside id="sidebar">
+    <section>
+      <header><h2>Projetos</h2><button id="add-project" title="Adicionar pasta de projeto">+</button></header>
+      <ul id="projects" class="list"></ul>
+    </section>
+    <section>
+      <header>
+        <h2>Contas</h2>
+        <span>
+          <button id="refresh-usage" title="Atualizar uso">↻</button>
+          <button id="add-profile" title="Adicionar conta">+</button>
+        </span>
+      </header>
+      <div id="accounts"></div>
+    </section>
+  </aside>
+
+  <main>
+    <div id="tabbar">
+      <div id="tabs"></div>
+      <button id="new-tab" title="Nova aba (Ctrl+T)">+</button>
+    </div>
+    <div id="panes">
+      <div id="empty">
+        <p>Nenhuma aba aberta.</p>
+        <p class="muted">Adicione um projeto à esquerda e abra um agente, ou use <kbd>Ctrl+T</kbd>.</p>
+      </div>
+    </div>
+  </main>
+
+  <dialog id="modal">
+    <form method="dialog" id="modal-form">
+      <h3 id="modal-title"></h3>
+      <div id="modal-fields"></div>
+      <p id="modal-error" class="error"></p>
+      <footer>
+        <button value="cancel" formnovalidate>Cancelar</button>
+        <button value="ok" class="primary" id="modal-ok">OK</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
