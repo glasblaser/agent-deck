@@ -179,3 +179,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 body.resizing webview { pointer-events: none; }
 body.sidebar-hidden { --sidebar: 0px; }
 body.sidebar-hidden #sidebar { display: none; }
+
+/* status do agente: pulsa trabalhando; "terminou" destaca a aba até ela receber foco */
+.dot.busy { animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .2; } }
+.tab.attention .label { color: var(--accent); font-weight: 600; }
+.tab.attention .dot { box-shadow: 0 0 0 2px var(--accent); }
+.frame-head .status { flex: none; font-size: 11px; color: var(--muted); }
+.frame-head .status.attention { color: var(--accent); font-weight: 600; }

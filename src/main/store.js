@@ -85,6 +85,19 @@ function addProject(dir) {
   return created;
 }
 
+// Abas abertas e layout, para reabrir tudo na próxima vez. Os valores voltam ao renderer e
+// passam de novo pelas mesmas validações de sempre (requireCwd, perfil, id de sessão) ao reabrir.
+function getSession() {
+  return state.session || null;
+}
+
+function saveSession(session) {
+  if (!session || !Array.isArray(session.tabs) || session.tabs.length > 64) return;
+  if (JSON.stringify(session).length > 100000) return;
+  state.session = session;
+  save();
+}
+
 function removeProject(id) {
   state.projects = state.projects.filter((p) => p.id !== id);
   save();
@@ -124,6 +137,6 @@ function requireCwd(target) {
 }
 
 module.exports = {
-  load, publicState, profile, addProfile, removeProfile, addProject, removeProject,
+  load, publicState, profile, addProfile, removeProfile, addProject, removeProject, getSession, saveSession,
   requireProjectPath, requireAllowedPath, requireCwd, slug, HOME,
 };

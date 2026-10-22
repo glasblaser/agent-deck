@@ -43,6 +43,32 @@ module.exports = function smoke(app, win, outDir) {
     if (stuck) log.push(`MODAL NÃO FECHOU (${type}): ${stuck}`);
   };
 
+  const tabsInfo = () => run(`JSON.stringify([...document.querySelectorAll('.tab')].map((e) =>
+    [e.querySelector('.label').textContent, e.dataset.status || '-', e.dataset.session || '-', e.classList.contains('attention') ? 'terminou' : '']))`);
+
+  // AGENT_DECK_SMOKE_RESTORE=1 com a mesma pasta de saída: só confere a reabertura da sessão anterior.
+  if (process.env.AGENT_DECK_SMOKE_RESTORE) {
+    win.webContents.once('did-finish-load', async () => {
+      try {
+        await sleep(25000);
+        log.push(`reaberto: ${await tabsInfo()}`);
+        log.push(`layout: ${await run(`document.querySelector('#panes').dataset.layout`)}`);
+        // O comando digitado em cada aba de agente aparece na primeira linha da tela dela.
+        for (let i = 0; i < 3; i += 1) {
+          await run(`document.querySelectorAll('.tab')[${i}].click()`);
+          await sleep(800);
+          log.push(`tela ${i}: ${await run(`[...document.querySelectorAll('.frame.focused .xterm-rows > div, #panes[data-layout="1"] .frame:not([hidden]) .xterm-rows > div')].map((e) => e.textContent.trim()).find((t) => /claude|codex/.test(t)) || ''`)}`);
+        }
+        await shot('07-reaberto');
+      } catch (error) {
+        log.push(`SMOKE FALHOU: ${error.stack}`);
+      }
+      fs.writeFileSync(path.join(outDir, 'console-restore.txt'), log.join('\n'));
+      app.quit();
+    });
+    return;
+  }
+
   win.webContents.once('did-finish-load', async () => {
     try {
       await sleep(2500);
@@ -136,6 +162,21 @@ module.exports = function smoke(app, win, outDir) {
       await sleep(300);
       log.push(`sidebar: arrastada=${afterDrag} escondida=${hidden} de volta=${await sidebarWidth()}`);
       await shot('06-sidebar');
+
+      // Status: manda a mensagem que o envio entre abas deixou no prompt do "Claude trabalho" (pty 3),
+      // com o foco em outra aba; espera trabalhando -> ocioso e o aviso "terminou".
+      ptys.write(3, '\r');
+      const seen = [];
+      for (let i = 0; i < 90; i += 1) {
+        await sleep(1000);
+        const status = await run(`document.querySelectorAll('.tab')[2].dataset.status || '-'`);
+        if (seen.at(-1) !== status) seen.push(status);
+        if (seen.includes('busy') && status === 'idle') break;
+      }
+      log.push(`status trabalho: ${seen.join(' -> ')}`);
+      await sleep(2000); // debounce do salvamento
+      log.push(`abas: ${await tabsInfo()}`);
+      log.push(`sessão salva: ${JSON.stringify(JSON.parse(fs.readFileSync(path.join(outDir, 'userData', 'state.json'), 'utf8')).session)}`);
     } catch (error) {
       log.push(`SMOKE FALHOU: ${error.stack}`);
     }

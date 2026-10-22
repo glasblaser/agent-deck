@@ -36,6 +36,8 @@ function serveApp(request) {
 }
 
 let win;
+// Ao fechar, os terminais morrem um a um e a UI tentaria salvar abas "encerradas"; a partir daqui, nada é salvo.
+let closing = false;
 
 function createWindow() {
   // Cabe na área útil do monitor: com escala de 125-150% no Windows, 1500 px lógicos passam da tela.
@@ -57,6 +59,7 @@ function createWindow() {
   if (process.env.AGENT_DECK_SMOKE) require('./smoke')(app, win, process.env.AGENT_DECK_SMOKE);
   win.loadURL('app://deck/renderer/index.html');
   ptys.attach(win.webContents);
+  win.on('close', () => { closing = true; });
 }
 
 // O navegador embutido (<webview>) nunca recebe preload nem Node, e popups
@@ -119,6 +122,11 @@ function registerIpc() {
   ipcMain.on('pty:write', (_e, id, data) => ptys.write(id, data));
   ipcMain.on('pty:resize', (_e, id, cols, rows) => ptys.resize(id, cols, rows));
   ipcMain.on('pty:kill', (_e, id) => ptys.kill(id));
+
+  handle('session:load', () => store.getSession());
+  ipcMain.on('session:save', (_e, session) => {
+    if (!closing) store.saveSession(session);
+  });
 
   handle('fs:list', (dir) => files.list(store.requireAllowedPath(dir)));
   handle('fs:read', (file) => files.read(store.requireAllowedPath(file)));

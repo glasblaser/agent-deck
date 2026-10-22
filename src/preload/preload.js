@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('deck', {
     kill: (id) => ipcRenderer.send('pty:kill', id),
     onData: (fn) => ipcRenderer.on('pty:data', (_e, id, data) => fn(id, data)),
     onExit: (fn) => ipcRenderer.on('pty:exit', (_e, id, code) => fn(id, code)),
+    onStatus: (fn) => ipcRenderer.on('agent:status', (_e, id, info) => fn(id, info)),
+  },
+  session: {
+    load: invoke('session:load'),
+    save: (session) => ipcRenderer.send('session:save', session),
   },
   fs: {
     list: invoke('fs:list'),

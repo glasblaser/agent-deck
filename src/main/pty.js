@@ -3,19 +3,33 @@
 // então o que roda é sempre o que você vê na tela.
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { fork } = require('node:child_process');
+const agents = require('./agents');
 
 let host;
 let sink;
 let nextId = 1;
 const alive = new Set();
 
-// O renderer só escolhe entre estes; nunca manda comando livre para cá.
-const AGENT_COMMANDS = {
-  claude: 'claude',
-  codex: 'codex',
-  'codex-login': 'codex login',
-};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// O renderer só escolhe o agente e, para reabrir, um id de sessão; nunca manda comando livre.
+// O id é gerado aqui (Claude) ou validado como UUID antes de entrar no comando.
+function agentCommand(agent, profile, resumeId) {
+  if (resumeId && !UUID.test(resumeId)) throw new Error('Id de sessão inválido.');
+  if (agent === 'claude') {
+    // Sem conversa em disco (nenhuma mensagem enviada) não há o que retomar: abre uma nova.
+    if (resumeId && agents.claudeTranscriptExists(profile, resumeId)) {
+      return { command: `claude --resume ${resumeId}`, sessionId: resumeId };
+    }
+    const sessionId = crypto.randomUUID();
+    return { command: `claude --session-id ${sessionId}`, sessionId };
+  }
+  if (agent === 'codex') return { command: resumeId ? `codex resume ${resumeId}` : 'codex', sessionId: resumeId || null };
+  if (agent === 'codex-login') return { command: 'codex login', sessionId: null };
+  throw new Error('Agente desconhecido.');
+}
 
 function findOnPath(exe) {
   for (const dir of (process.env.PATH || '').split(path.delimiter)) {
@@ -68,12 +82,16 @@ function ensureHost() {
     if (msg.type === 'data') emit('pty:data', msg.id, msg.data);
     if (msg.type === 'exit') {
       alive.delete(msg.id);
+      agents.untrack(msg.id);
       emit('pty:exit', msg.id, msg.code);
     }
   });
   // Se o host cair, todas as abas de terminal são marcadas como encerradas.
   host.on('exit', () => {
-    for (const id of alive) emit('pty:exit', id, -1);
+    for (const id of alive) {
+      agents.untrack(id);
+      emit('pty:exit', id, -1);
+    }
     alive.clear();
     host = null;
   });
@@ -84,8 +102,10 @@ function attach(webContents) {
   sink = webContents;
 }
 
-function spawn({ cwd, profile, agent, cols = 120, rows = 30 }) {
-  if (agent && !AGENT_COMMANDS[agent]) throw new Error('Agente desconhecido.');
+agents.onChange((id, info) => emit('agent:status', id, info));
+
+function spawn({ cwd, profile, agent, resumeId, cols = 120, rows = 30 }) {
+  const launch = agent ? agentCommand(agent, profile, resumeId) : null;
   const id = nextId++;
   ensureHost().send({
     type: 'spawn',
@@ -93,10 +113,11 @@ function spawn({ cwd, profile, agent, cols = 120, rows = 30 }) {
     shell: SHELL,
     args: process.platform === 'win32' ? ['-NoLogo'] : [],
     options: { name: 'xterm-256color', cols, rows, cwd, env: envFor(profile) },
-    input: agent ? `${AGENT_COMMANDS[agent]}\r` : null,
+    input: launch ? `${launch.command}\r` : null,
   });
   alive.add(id);
-  return { id, shell: path.basename(SHELL) };
+  if (agent === 'claude' || agent === 'codex') agents.track(id, { kind: agent, profile, cwd, sessionId: launch.sessionId });
+  return { id, shell: path.basename(SHELL), sessionId: launch?.sessionId || null };
 }
 
 function write(id, data) {
@@ -108,11 +129,13 @@ function resize(id, cols, rows) {
 }
 
 function kill(id) {
+  agents.untrack(id);
   if (alive.delete(id)) host?.send({ type: 'kill', id });
 }
 
 // O host mata todos os terminais ao perder a conexão.
 function killAll() {
+  for (const id of alive) agents.untrack(id);
   alive.clear();
   host?.disconnect();
 }

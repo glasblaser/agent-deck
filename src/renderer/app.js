@@ -95,20 +95,28 @@ let layout = 1;
 let slots = [null];
 let focusedSlot = 0;
 
-function addTab(tab) {
+// slot: só na restauração (índice do painel, ou -1 para aba fora da tela). Sem ele, a aba nova
+// vai para o primeiro painel vazio; se não houver, substitui a do painel focado.
+function addTab(tab, slot) {
   tab.id = ++tabSeq;
   tab.pane.classList.add('pane');
   tab.headLabel = h('span', { class: 'label' });
   tab.headDot = h('span', { class: 'dot' });
+  tab.headStatus = h('span', { class: 'status' });
   tab.frame = h('div', { class: 'frame', hidden: true, onmousedown: () => focusTab(tab) },
     h('div', { class: 'frame-head' },
       tab.headDot,
       tab.headLabel,
+      tab.headStatus,
       h('button', { class: 'close', title: 'Fechar', onclick: () => closeTab(tab) }, '×')),
     tab.pane);
   $('#panes').append(tab.frame);
   tabs.push(tab);
-  // Aba nova vai para o primeiro painel vazio; se não houver, substitui a do painel focado.
+  if (slot !== undefined) {
+    if (slot >= 0 && slot < layout) slots[slot] = tab;
+    layoutPanes();
+    return tab;
+  }
   const empty = slots.indexOf(null);
   if (empty !== -1) focusedSlot = empty;
   activate(tab);
@@ -123,6 +131,7 @@ function activate(tab) {
     else slots[focusedSlot] = tab;
   }
   activeTab = slots[focusedSlot] || null;
+  if (activeTab) activeTab.attention = false;
   layoutPanes();
   requestAnimationFrame(() => activeTab?.onShow?.());
 }
@@ -133,6 +142,7 @@ function focusTab(tab) {
   if (index === -1 || activeTab === tab) return;
   focusedSlot = index;
   activeTab = tab;
+  tab.attention = false;
   renderTabs();
 }
 
@@ -145,7 +155,6 @@ function setLayout(count) {
   slots = Array.from({ length: count }, (_, i) => order[i] || null);
   focusedSlot = Math.max(0, slots.indexOf(focused));
   activeTab = slots[focusedSlot] || null;
-  try { localStorage.setItem('layout', String(count)); } catch {}
   layoutPanes();
   requestAnimationFrame(() => activeTab?.onShow?.());
 }
@@ -171,6 +180,48 @@ function layoutPanes() {
   });
   $('#empty').hidden = tabs.length > 0;
   renderTabs();
+  saveSession();
+}
+
+// ---------- sessão: reabrir as abas na próxima vez ----------
+
+// Fica ligado até a restauração terminar, para o estado vazio do começo não apagar a sessão salva.
+let restoring = true;
+let saveTimer;
+
+function saveSession() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => deck.session.save({
+    layout,
+    focusedSlot,
+    tabs: tabs.map((t) => {
+      const saved = t.persist?.();
+      return saved && { ...saved, slot: slots.indexOf(t) };
+    }).filter(Boolean),
+  }), 400);
+}
+
+async function restoreSession() {
+  try {
+    const saved = await attempt(() => deck.session.load());
+    if (!saved?.tabs?.length) return;
+    setLayout([1, 2, 4].includes(saved.layout) ? saved.layout : 1);
+    for (const t of saved.tabs) {
+      const slot = Number.isInteger(t.slot) && t.slot < layout ? t.slot : -1;
+      if (t.type === 'browser') openBrowser(t.url, slot);
+      else if (t.type === 'editor') openEditor(t.cwd, slot);
+      else {
+        const agent = ['claude', 'codex'].includes(t.type) ? t.type : null;
+        openTerminal({ cwd: t.cwd, profileId: t.profileId, agent, resumeId: agent && t.sessionId, slot });
+      }
+    }
+    focusedSlot = Number.isInteger(saved.focusedSlot) && saved.focusedSlot < layout ? saved.focusedSlot : 0;
+    activate(null);
+  } finally {
+    restoring = false;
+    saveSession();
+  }
 }
 
 function closeTab(tab) {
@@ -186,21 +237,27 @@ function closeTab(tab) {
   activate(null);
 }
 
+const STATUS_LABEL = { busy: 'trabalhando…', attention: 'terminou' };
+
 function renderTabs() {
   $('#tabs').replaceChildren(...tabs.map((tab) =>
     h('div', {
-      class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''}`,
-      title: tab.tooltip || tab.title,
+      class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''} ${tab.attention ? 'attention' : ''}`,
+      title: [tab.tooltip || tab.title, STATUS_LABEL[tab.attention ? 'attention' : tab.status]].filter(Boolean).join(' · '),
+      'data-status': tab.status || null,
+      'data-session': tab.sessionId || null,
       onclick: () => activate(tab),
       onauxclick: (e) => e.button === 1 && closeTab(tab),
     },
-    h('span', { class: `dot ${tab.kindClass || ''}` }),
+    h('span', { class: `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}` }),
     h('span', { class: 'label' }, tab.title),
     h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
   for (const tab of tabs) {
     tab.headLabel.textContent = tab.title;
     tab.headLabel.title = tab.tooltip || tab.title;
-    tab.headDot.className = `dot ${tab.kindClass || ''}`;
+    tab.headDot.className = `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}`;
+    tab.headStatus.textContent = STATUS_LABEL[tab.attention ? 'attention' : tab.status] || '';
+    tab.headStatus.classList.toggle('attention', !!tab.attention);
     tab.frame.classList.toggle('exited', !!tab.exited);
   }
   for (const button of document.querySelectorAll('#layouts button')) {
@@ -218,7 +275,7 @@ const AGENTS = {
   'codex-login': { label: 'Login Codex', kind: 'codex' },
 };
 
-function openTerminal({ cwd, profileId, agent }) {
+function openTerminal({ cwd, profileId, agent, resumeId, slot }) {
   const pane = h('div', { class: 'terminal' });
   const term = new Terminal({
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
@@ -241,6 +298,9 @@ function openTerminal({ cwd, profileId, agent }) {
     cwd,
     term,
     isAgent: !!agent && agent !== 'codex-login',
+    // Reabre como estava: agente com o id da conversa, terminal na mesma pasta e conta. Login não volta.
+    persist: () => (agent === 'codex-login' ? null
+      : { type: agent || 'terminal', cwd, profileId: profileId || null, sessionId: tab.sessionId || null }),
     onShow: () => {
       fit.fit();
       term.focus();
@@ -251,7 +311,7 @@ function openTerminal({ cwd, profileId, agent }) {
       term.dispose();
     },
   };
-  addTab(tab);
+  addTab(tab, slot);
   term.open(pane);
   fit.fit();
 
@@ -290,12 +350,14 @@ function openTerminal({ cwd, profileId, agent }) {
   });
   observer.observe(pane);
 
-  attempt(() => deck.pty.spawn({ cwd, profileId, agent, cols: term.cols, rows: term.rows })).then((res) => {
+  attempt(() => deck.pty.spawn({ cwd, profileId, agent, resumeId, cols: term.cols, rows: term.rows })).then((res) => {
     if (!res) {
       term.write('\r\n\x1b[31mNão foi possível abrir o terminal.\x1b[0m\r\n');
       return;
     }
     tab.ptyId = res.id;
+    tab.sessionId = res.sessionId;
+    saveSession();
     terminalsByPty.set(res.id, { term, tab });
     term.onData((data) => deck.pty.write(res.id, data));
   });
@@ -366,6 +428,19 @@ function contextMenu(x, y, items) {
 }
 
 deck.pty.onData((id, data) => terminalsByPty.get(id)?.term.write(data));
+// Status vindo do main: id de sessão (pode mudar com /clear ou /resume) e trabalhando/ocioso.
+// Agente que termina numa aba que você não está olhando ganha o aviso "terminou" até receber foco.
+deck.pty.onStatus((id, info) => {
+  const tab = terminalsByPty.get(id)?.tab;
+  if (!tab) return;
+  const sessionChanged = info.sessionId && info.sessionId !== tab.sessionId;
+  if (tab.status === 'busy' && info.status === 'idle' && tab !== activeTab) tab.attention = true;
+  tab.status = info.status;
+  if (info.sessionId) tab.sessionId = info.sessionId;
+  renderTabs();
+  if (sessionChanged) saveSession();
+});
+
 deck.pty.onExit((id, code) => {
   const entry = terminalsByPty.get(id);
   if (!entry) return;
@@ -395,7 +470,7 @@ function loadMonaco() {
   return monacoReady;
 }
 
-async function openEditor(root) {
+async function openEditor(root, slot) {
   const tree = h('div', { class: 'tree' });
   const pathLabel = h('span', { class: 'path muted' }, 'Selecione um arquivo');
   const saveButton = h('button', { disabled: true, title: 'Salvar (Ctrl+S)' }, 'Salvar');
@@ -417,13 +492,14 @@ async function openEditor(root) {
     title: `Editor · ${basename(root)}`,
     tooltip: root,
     kindClass: 'editor',
+    persist: () => ({ type: 'editor', cwd: root }),
     onShow: () => editor?.layout(),
     isDirty: () => [...models.values()].some((m) => m.dirty()),
     dispose: () => {
       for (const m of models.values()) m.model.dispose();
       editor?.dispose();
     },
-  });
+  }, slot);
 
   const monaco = await loadMonaco();
   editor = monaco.editor.create(host, {
@@ -511,7 +587,7 @@ function normalizeUrl(text) {
   return `https://www.google.com/search?q=${encodeURIComponent(value)}`;
 }
 
-function openBrowser(url = 'https://www.google.com') {
+function openBrowser(url = 'https://www.google.com', slot) {
   const address = h('input', { class: 'address', value: url, spellcheck: 'false' });
   const view = h('webview', { src: url, partition: 'persist:browser', allowpopups: false });
   const pane = h('div', { class: 'browser' },
@@ -524,11 +600,20 @@ function openBrowser(url = 'https://www.google.com') {
       h('button', { title: 'DevTools', onclick: () => view.openDevTools() }, '⚙')),
     view);
 
-  const tab = addTab({ pane, title: 'Navegador', kindClass: 'browser', onShow: () => {} });
+  const tab = addTab({
+    pane,
+    title: 'Navegador',
+    kindClass: 'browser',
+    onShow: () => {},
+    persist: () => ({ type: 'browser', url: address.value }),
+  }, slot);
   address.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') view.loadURL(normalizeUrl(address.value));
   });
-  view.addEventListener('did-navigate', (e) => { address.value = e.url; });
+  view.addEventListener('did-navigate', (e) => {
+    address.value = e.url;
+    saveSession();
+  });
   view.addEventListener('did-navigate-in-page', (e) => { if (e.isMainFrame) address.value = e.url; });
   view.addEventListener('page-title-updated', (e) => {
     tab.title = e.title.slice(0, 40) || 'Navegador';
@@ -850,10 +935,6 @@ try {
 for (const button of document.querySelectorAll('#layouts button')) {
   button.addEventListener('click', () => setLayout(Number(button.dataset.layout)));
 }
-try {
-  const saved = Number(localStorage.getItem('layout'));
-  if ([2, 4].includes(saved)) setLayout(saved);
-} catch {}
 
 window.addEventListener('focus', () => {
   for (const project of state.projects) loadWorktrees(project).then(renderProjects);
@@ -862,4 +943,5 @@ window.addEventListener('focus', () => {
 setInterval(() => refreshUsage(), 5 * 60 * 1000);
 setInterval(renderAccounts, 60 * 1000);
 
-refreshState();
+// Primeiro o estado (contas, projetos), depois as abas da última sessão: elas dependem dos dois.
+refreshState().then(restoreSession);
