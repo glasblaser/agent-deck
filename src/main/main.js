@@ -54,6 +54,9 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webviewTag: true,
+      // No teste de fumaça a janela costuma ficar atrás de outras; sem isso o Chromium pausa
+      // a renderização (ResizeObserver, requestAnimationFrame) e o teste mede um estado congelado.
+      backgroundThrottling: !process.env.AGENT_DECK_SMOKE,
     },
   });
   if (process.env.AGENT_DECK_SMOKE) require('./smoke')(app, win, process.env.AGENT_DECK_SMOKE);

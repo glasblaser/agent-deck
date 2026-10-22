@@ -346,9 +346,14 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot }) {
   const observer = new ResizeObserver(() => {
     if (pane.hidden || !pane.offsetWidth) return;
     fit.fit();
-    if (tab.ptyId) deck.pty.resize(tab.ptyId, term.cols, term.rows);
   });
   observer.observe(pane);
+  // Qualquer mudança de tamanho do xterm (observer, onShow, fonte carregando) vai para o pty.
+  // Se o pty não souber, o agente desenha para um terminal menor e o prompt fica no meio da tela.
+  term.onResize(({ cols, rows }) => {
+    pane.dataset.size = `${cols}x${rows}`;
+    if (tab.ptyId) deck.pty.resize(tab.ptyId, cols, rows);
+  });
 
   attempt(() => deck.pty.spawn({ cwd, profileId, agent, resumeId, cols: term.cols, rows: term.rows })).then((res) => {
     if (!res) {
@@ -360,6 +365,8 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot }) {
     saveSession();
     terminalsByPty.set(res.id, { term, tab });
     term.onData((data) => deck.pty.write(res.id, data));
+    // O tamanho pode ter mudado enquanto o pty abria (ptyId ainda vazio): sincroniza agora.
+    deck.pty.resize(res.id, term.cols, term.rows);
   });
   return tab;
 }
@@ -902,10 +909,10 @@ document.addEventListener('keydown', (e) => {
   }
 }, true);
 
-// Sidebar: arrastar a borda muda a largura (180-600 px), duplo clique volta a 290, Ctrl+Shift+B esconde.
+// Sidebar: arrastar a borda muda a largura (220-600 px), duplo clique volta a 290, Ctrl+Shift+B esconde.
 const SIDEBAR_DEFAULT = 290;
 function setSidebarWidth(px) {
-  const width = Math.round(Math.min(600, Math.max(180, px)));
+  const width = Math.round(Math.min(600, Math.max(220, px)));
   document.body.style.setProperty('--sidebar', `${width}px`);
   try { localStorage.setItem('sidebar', String(width)); } catch {}
 }

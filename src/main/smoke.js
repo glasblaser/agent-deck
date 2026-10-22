@@ -5,6 +5,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ptys = require('./pty');
 
+// Último tamanho que cada pty recebeu (no spawn ou em resize), para comparar com o que o xterm mostra.
+const ptySizes = new Map();
+const realSpawn = ptys.spawn;
+const realResize = ptys.resize;
+ptys.spawn = (opts) => {
+  const res = realSpawn(opts);
+  ptySizes.set(res.id, { cols: opts.cols, rows: opts.rows });
+  return res;
+};
+ptys.resize = (id, cols, rows) => {
+  if (cols > 0 && rows > 0) ptySizes.set(id, { cols, rows });
+  realResize(id, cols, rows);
+};
+
 module.exports = function smoke(app, win, outDir) {
   fs.mkdirSync(outDir, { recursive: true });
   require('./store').addProject(path.join(__dirname, '..', '..'));
@@ -177,6 +191,18 @@ module.exports = function smoke(app, win, outDir) {
       await sleep(2000); // debounce do salvamento
       log.push(`abas: ${await tabsInfo()}`);
       log.push(`sessão salva: ${JSON.stringify(JSON.parse(fs.readFileSync(path.join(outDir, 'userData', 'state.json'), 'utf8')).session)}`);
+
+      // Tamanho: o pty tem que saber exatamente as linhas/colunas que o xterm mostra; se não,
+      // o agente desenha para um terminal menor e o prompt fica no meio da tela.
+      for (let i = 0; i < 3; i += 1) {
+        await run(`document.querySelectorAll('.tab')[${i}].click()`);
+        await sleep(800);
+        // data-size vem do onResize do xterm: não depende da janela estar renderizando.
+        const shown = await run(`document.querySelector('.frame:not([hidden]) .pane').dataset.size || 'inicial'`);
+        const last = ptySizes.get(i + 1);
+        const pty = last && `${last.cols}x${last.rows}`;
+        log.push(`tamanho aba ${i}: xterm ${shown}, pty ${pty} ${shown === pty ? 'OK' : 'DIVERGE'}`);
+      }
     } catch (error) {
       log.push(`SMOKE FALHOU: ${error.stack}`);
     }
