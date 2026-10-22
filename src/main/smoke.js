@@ -79,6 +79,9 @@ module.exports = function smoke(app, win, outDir) {
     const write = ptys.write;
     ptys.write = (id, data) => { writes.push({ id, data, at: Date.now() }); write(id, data); };
 
+    const { clipboard } = require('electron');
+    // Nesse Electron o readText do main devolve Promise; o finally espera por ela.
+    const savedClipboard = Promise.resolve(clipboard.readText());
     win.webContents.once('did-finish-load', async () => {
       try {
         await sleep(2500);
@@ -92,6 +95,23 @@ module.exports = function smoke(app, win, outDir) {
         const screen = () => run(`[...document.querySelectorAll('.frame:not([hidden]) .xterm-rows > div')].map((e) => e.textContent).join('\\n')`);
         await run(`window.__toasts = []; new MutationObserver((list) => list.forEach((m) => m.addedNodes.forEach((n) =>
           n.classList?.contains('toast') && __toasts.push(n.textContent)))).observe(document.body, { childList: true })`);
+        // "Enviar área de transferência para" a partir de um terminal no repo: o Claude de destino tem que recusar
+        // enquanto está no diálogo de trust e aceitar depois. A área de transferência sua volta ao fim.
+        const SEND = 'SMOKE-ENVIO';
+        const sendFromTerminal = async (label) => {
+          clipboard.writeText(`${SEND} ${label}`);
+          const before = await run('__toasts.length');
+          await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Terminal')).click()`);
+          await sleep(500);
+          await run(`document.querySelector('.frame:not([hidden]) .pane').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 }))`);
+          await sleep(300);
+          await run(`[...document.querySelectorAll('.context-menu button.indent')].filter((b) => b.textContent.includes('teste-briefing')).at(-1)?.click()`);
+          await sleep(1000);
+          log.push(`envio ${label}: colado=${writes.some((w) => w.data.includes(`${SEND} ${label}`))} toast=${JSON.stringify((await run('__toasts')).slice(before))}`);
+          await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('teste-briefing')).click()`);
+          await sleep(500);
+        };
+        let sentDuringTrust = false;
         let trustedAt = null;
         let briefingAt = null;
         for (let i = 0; i < 90 && !briefingAt; i += 1) {
@@ -100,6 +120,12 @@ module.exports = function smoke(app, win, outDir) {
           if (/trust this folder/i.test(await screen()) && (!trustedAt || Date.now() - trustedAt > 4000)) {
             const ptyId = Math.max(...[...ptySizes.keys()]);
             log.push(`trust na tela; briefing já escrito no pty? ${writes.some((w) => w.data.includes(MARK))}`);
+            if (!sentDuringTrust) {
+              sentDuringTrust = true;
+              await run(`document.querySelector('.project:last-child [title="Terminal aqui"]').click()`);
+              await sleep(2500);
+              await sendFromTerminal('durante-trust');
+            }
             await sleep(2000);
             write(ptyId, '\x1b[B');
             await sleep(500);
@@ -118,6 +144,7 @@ module.exports = function smoke(app, win, outDir) {
         }
         log.push(`Enter depois do briefing: ${writes.some((w) => w.at > briefingAt && w.data === '\r')}`);
         log.push(`status: ${seen.join(' -> ')}`);
+        await sendFromTerminal('depois-do-prompt');
         await status('agente com briefing');
         await shot('t1-briefing');
 
@@ -147,6 +174,14 @@ module.exports = function smoke(app, win, outDir) {
         await shot('t3-concluido');
       } catch (error) {
         log.push(`SMOKE FALHOU: ${error.stack}`);
+      } finally {
+        // Devolve a área de transferência; se o conteúdo não voltar como texto, ao menos não fica o do teste.
+        try {
+          clipboard.writeText(String((await savedClipboard) ?? ''));
+        } catch (error) {
+          clipboard.clear();
+          log.push(`área de transferência não restaurada (${error.message}); foi limpa`);
+        }
       }
       fs.writeFileSync(path.join(outDir, 'console-task.txt'), log.join('\n'));
       app.quit();

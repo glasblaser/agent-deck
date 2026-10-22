@@ -398,10 +398,19 @@ function agentTargets(from) {
 // Não aperta Enter: você revisa e envia.
 // Só com bracketed paste ligado: sem ele cada quebra de linha vira Enter, e num diálogo
 // (ex.: "trust this folder", com "No, exit" selecionado) isso responderia por você.
+// O bracketed paste sozinho não prova que o agente está no prompt: o pwsh já liga o modo antes
+// do agente abrir. No Claude o sinal confiável é o status do arquivo de sessão, que só existe
+// depois do "trust this folder" e some quando ele sai. O Codex não publica nada: fica só o bracketed paste.
 async function sendToAgent(from, target, getText) {
   const text = (await attempt(getText))?.trim();
   if (!text) return toast('Nada para enviar.');
   if (!target.ptyId) return toast('A aba de destino foi encerrada.');
+  if (target.kindClass === 'claude' && !['idle', 'busy'].includes(target.status)) {
+    activate(target);
+    return toast(target.status === 'off'
+      ? 'O Claude dessa aba saiu (a aba voltou ao shell). Nada foi colado.'
+      : 'O Claude de destino ainda não chegou no prompt (carregando ou no diálogo "trust this folder"). Nada foi colado.');
+  }
   if (!target.term.modes.bracketedPasteMode) {
     activate(target);
     return toast('O agente de destino não está no prompt (diálogo aberto ou ainda carregando). Nada foi colado.');
