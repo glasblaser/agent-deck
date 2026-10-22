@@ -1,6 +1,6 @@
 // Processo principal: janela, protocolo app:// e todos os handlers IPC.
 // O renderer roda em sandbox, sem Node; tudo que toca disco, rede ou processo passa por aqui.
-const { app, BrowserWindow, ipcMain, protocol, net, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, net, dialog, shell, screen } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -38,9 +38,11 @@ function serveApp(request) {
 let win;
 
 function createWindow() {
+  // Cabe na área útil do monitor: com escala de 125-150% no Windows, 1500 px lógicos passam da tela.
+  const area = screen.getPrimaryDisplay().workAreaSize;
   win = new BrowserWindow({
-    width: 1500,
-    height: 920,
+    width: Math.min(1500, area.width),
+    height: Math.min(920, area.height),
     backgroundColor: '#14161a',
     title: 'Agent Deck',
     autoHideMenuBar: true,

@@ -24,7 +24,7 @@ module.exports = function smoke(app, win, outDir) {
   const status = async (step) => log.push(`${step}: ${await run(`JSON.stringify({
     tabs: [...document.querySelectorAll('.tab .label')].map((e) => e.textContent),
     toast: [...document.querySelectorAll('.toast')].map((e) => e.textContent),
-    tela: [...document.querySelectorAll('.pane:not([hidden]) .xterm-rows > div')].map((e) => e.textContent.trimEnd()).filter(Boolean).slice(0, 14),
+    tela: [...document.querySelectorAll('.frame:not([hidden]) .pane .xterm-rows > div')].map((e) => e.textContent.trimEnd()).filter(Boolean).slice(0, 14),
   })`)}`);
   const newTab = async (type, profileName) => {
     await run(`document.querySelector('#new-tab').click()`);
@@ -68,7 +68,7 @@ module.exports = function smoke(app, win, outDir) {
       await run(`document.querySelectorAll('.tab')[0].click()`);
       await sleep(500);
       const line = JSON.parse(await run(`JSON.stringify((() => {
-        const row = [...document.querySelectorAll('.pane:not([hidden]) .xterm-rows > div')].find((e) => e.textContent.startsWith('CLAUDE_CONFIG_DIR='));
+        const row = [...document.querySelectorAll('.frame:not([hidden]) .pane .xterm-rows > div')].find((e) => e.textContent.startsWith('CLAUDE_CONFIG_DIR='));
         const r = row.getBoundingClientRect();
         return { x: Math.round(r.left + 2), y: Math.round(r.top + r.height / 2), width: Math.round(row.textContent.trimEnd().length * r.width / row.textContent.length) };
       })())`));
@@ -81,7 +81,7 @@ module.exports = function smoke(app, win, outDir) {
       const sent = [];
       const write = ptys.write;
       ptys.write = (id, data) => { sent.push({ id, data }); write(id, data); };
-      await run(`document.querySelector('.pane:not([hidden])').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: ${line.x}, clientY: ${line.y} }))`);
+      await run(`document.querySelector('.frame:not([hidden]) .pane').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: ${line.x}, clientY: ${line.y} }))`);
       await sleep(300);
       log.push(`menu: ${await run(`JSON.stringify([...document.querySelectorAll('.context-menu > *')].map((e) => e.textContent))`)}`);
       await run(`[...document.querySelectorAll('.context-menu button.indent')].find((b) => b.textContent.includes('Claude trabalho'))?.click()`);
@@ -101,6 +101,41 @@ module.exports = function smoke(app, win, outDir) {
       await sleep(2000);
       await status('editor');
       await shot('04-editor');
+
+      // Painéis: 4 (2×2), 2 lado a lado e de volta a 1. Confere frames visíveis, tamanhos e
+      // se os terminais receberam resize (o ConPTY precisa saber das colunas novas).
+      const resized = [];
+      const resize = ptys.resize;
+      ptys.resize = (id, cols, rows) => { resized.push(`${id}:${cols}x${rows}`); resize(id, cols, rows); };
+      for (const count of [4, 2, 1]) {
+        await run(`document.querySelector('#layouts [data-layout="${count}"]').click()`);
+        await sleep(1200);
+        log.push(`layout ${count}: ${await run(`JSON.stringify([...document.querySelectorAll('#panes > .frame:not([hidden]), #panes > .slot-empty')]
+          .sort((a, b) => a.style.order - b.style.order)
+          .map((e) => { const r = e.getBoundingClientRect(); return (e.querySelector('.frame-head .label')?.textContent || 'vazio') + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + (e.classList.contains('focused') ? ' *' : ''); }))`)} resize: ${resized.splice(0).join(' ')}`);
+        await shot(`05-layout-${count}`);
+      }
+      ptys.resize = resize;
+
+      // Sidebar: arrasta a borda de 290 para 450 px e esconde/mostra com Ctrl+Shift+B.
+      const sidebarWidth = () => run(`Math.round(document.querySelector('#sidebar').getBoundingClientRect().width)`);
+      const drag = (type, x) => win.webContents.sendInputEvent({ type, x, y: 400, button: 'left', clickCount: 1 });
+      drag('mouseDown', 290);
+      for (let x = 300; x <= 450; x += 30) win.webContents.sendInputEvent({ type: 'mouseMove', x, y: 400, modifiers: ['leftButtonDown'] });
+      drag('mouseUp', 450);
+      await sleep(500);
+      const afterDrag = await sidebarWidth();
+      const key = () => {
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'B', modifiers: ['control', 'shift'] });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'B', modifiers: ['control', 'shift'] });
+      };
+      key();
+      await sleep(300);
+      const hidden = await sidebarWidth();
+      key();
+      await sleep(300);
+      log.push(`sidebar: arrastada=${afterDrag} escondida=${hidden} de volta=${await sidebarWidth()}`);
+      await shot('06-sidebar');
     } catch (error) {
       log.push(`SMOKE FALHOU: ${error.stack}`);
     }

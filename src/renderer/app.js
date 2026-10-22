@@ -88,38 +88,108 @@ function form(title, fields, okLabel = 'OK') {
 
 // ---------- abas ----------
 
+// Painéis: 1, 2 (lado a lado) ou 4 (2×2). Cada painel mostra uma aba; slots[i] é a aba do painel i.
+// Os frames nunca mudam de lugar no DOM (mover um <webview> recarrega a página): a posição vem
+// do grid, pela ordem do slot, e quem não está em nenhum slot fica escondido.
+let layout = 1;
+let slots = [null];
+let focusedSlot = 0;
+
 function addTab(tab) {
   tab.id = ++tabSeq;
   tab.pane.classList.add('pane');
-  $('#panes').append(tab.pane);
+  tab.headLabel = h('span', { class: 'label' });
+  tab.headDot = h('span', { class: 'dot' });
+  tab.frame = h('div', { class: 'frame', hidden: true, onmousedown: () => focusTab(tab) },
+    h('div', { class: 'frame-head' },
+      tab.headDot,
+      tab.headLabel,
+      h('button', { class: 'close', title: 'Fechar', onclick: () => closeTab(tab) }, '×')),
+    tab.pane);
+  $('#panes').append(tab.frame);
   tabs.push(tab);
-  renderTabs();
+  // Aba nova vai para o primeiro painel vazio; se não houver, substitui a do painel focado.
+  const empty = slots.indexOf(null);
+  if (empty !== -1) focusedSlot = empty;
   activate(tab);
   return tab;
 }
 
+// Mostra a aba: se já está num painel, só foca ele; senão entra no painel focado.
 function activate(tab) {
+  if (tab) {
+    const index = slots.indexOf(tab);
+    if (index !== -1) focusedSlot = index;
+    else slots[focusedSlot] = tab;
+  }
+  activeTab = slots[focusedSlot] || null;
+  layoutPanes();
+  requestAnimationFrame(() => activeTab?.onShow?.());
+}
+
+// Clique dentro de um painel: só troca o foco, sem mexer no layout.
+function focusTab(tab) {
+  const index = slots.indexOf(tab);
+  if (index === -1 || activeTab === tab) return;
+  focusedSlot = index;
   activeTab = tab;
-  for (const t of tabs) t.pane.hidden = t !== tab;
+  renderTabs();
+}
+
+function setLayout(count) {
+  const visible = slots.filter(Boolean);
+  const focused = activeTab;
+  layout = count;
+  // Mantém a aba focada visível e completa os painéis com as abas que já estavam na tela e depois as outras.
+  const order = [focused, ...visible, ...tabs].filter((t, i, all) => t && all.indexOf(t) === i);
+  slots = Array.from({ length: count }, (_, i) => order[i] || null);
+  focusedSlot = Math.max(0, slots.indexOf(focused));
+  activeTab = slots[focusedSlot] || null;
+  try { localStorage.setItem('layout', String(count)); } catch {}
+  layoutPanes();
+  requestAnimationFrame(() => activeTab?.onShow?.());
+}
+
+function layoutPanes() {
+  const panes = $('#panes');
+  panes.dataset.layout = String(layout);
+  for (const t of tabs) {
+    const index = slots.indexOf(t);
+    t.frame.hidden = index === -1;
+    t.frame.style.order = String(index);
+    t.frame.classList.toggle('focused', index === focusedSlot && layout > 1);
+  }
+  // Painel sem aba: um espaço reservado clicável, que vira o painel focado.
+  for (const el of panes.querySelectorAll('.slot-empty')) el.remove();
+  slots.forEach((t, index) => {
+    if (t || !tabs.length) return;
+    panes.append(h('div', {
+      class: `slot-empty ${index === focusedSlot ? 'focused' : ''}`,
+      style: `order:${index}`,
+      onmousedown: () => { focusedSlot = index; activeTab = null; layoutPanes(); },
+    }, 'Painel vazio: clique aqui e escolha uma aba lá em cima'));
+  });
   $('#empty').hidden = tabs.length > 0;
   renderTabs();
-  requestAnimationFrame(() => tab?.onShow?.());
 }
 
 function closeTab(tab) {
   if (tab.isDirty?.() && !confirm(`"${tab.title}" tem alterações não salvas. Fechar mesmo assim?`)) return;
   tab.dispose?.();
-  tab.pane.remove();
+  tab.frame.remove();
   tabs.splice(tabs.indexOf(tab), 1);
-  if (activeTab === tab) activate(tabs[tabs.length - 1] || null);
-  else renderTabs();
-  $('#empty').hidden = tabs.length > 0;
+  const index = slots.indexOf(tab);
+  if (index !== -1) {
+    // O painel que ficou vago recebe a aba mais recente que não está na tela.
+    slots[index] = [...tabs].reverse().find((t) => !slots.includes(t)) || null;
+  }
+  activate(null);
 }
 
 function renderTabs() {
   $('#tabs').replaceChildren(...tabs.map((tab) =>
     h('div', {
-      class: `tab ${tab === activeTab ? 'active' : ''} ${tab.exited ? 'exited' : ''}`,
+      class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''}`,
       title: tab.tooltip || tab.title,
       onclick: () => activate(tab),
       onauxclick: (e) => e.button === 1 && closeTab(tab),
@@ -127,6 +197,15 @@ function renderTabs() {
     h('span', { class: `dot ${tab.kindClass || ''}` }),
     h('span', { class: 'label' }, tab.title),
     h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
+  for (const tab of tabs) {
+    tab.headLabel.textContent = tab.title;
+    tab.headLabel.title = tab.tooltip || tab.title;
+    tab.headDot.className = `dot ${tab.kindClass || ''}`;
+    tab.frame.classList.toggle('exited', !!tab.exited);
+  }
+  for (const button of document.querySelectorAll('#layouts button')) {
+    button.classList.toggle('on', Number(button.dataset.layout) === layout);
+  }
 }
 
 // ---------- terminal ----------
@@ -509,7 +588,9 @@ function renderProjects() {
         h('li', { class: 'row', title: wt.path },
           h('span', { class: 'branch' }, wt.branch || basename(wt.path)),
           agentButtons(wt.path),
-          h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')))));
+          wt.managed
+            ? h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')
+            : h('span', { class: 'external muted small', title: `Criada fora do app (${wt.path}); remova por onde ela foi criada.` }, 'externa')))));
   }));
 }
 
@@ -725,8 +806,54 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     const index = tabs.indexOf(activeTab);
     activate(tabs[(index + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]);
+  } else if (e.code === 'KeyB' && e.shiftKey && !e.altKey) {
+    // Ctrl+Shift: o Ctrl+B sozinho é do agente (no Claude Code, manda o comando pra segundo plano).
+    e.preventDefault();
+    toggleSidebar();
+  } else if (e.shiftKey && !e.altKey && ['Digit1', 'Digit2', 'Digit4'].includes(e.code)) {
+    // e.code: tecla física, igual em qualquer layout de teclado. Ctrl+Alt ficaria com o AltGr (¹ ² £ no ABNT2).
+    e.preventDefault();
+    setLayout(Number(e.code.slice(-1)));
   }
 }, true);
+
+// Sidebar: arrastar a borda muda a largura (180-600 px), duplo clique volta a 290, Ctrl+Shift+B esconde.
+const SIDEBAR_DEFAULT = 290;
+function setSidebarWidth(px) {
+  const width = Math.round(Math.min(600, Math.max(180, px)));
+  document.body.style.setProperty('--sidebar', `${width}px`);
+  try { localStorage.setItem('sidebar', String(width)); } catch {}
+}
+function toggleSidebar() {
+  const hidden = document.body.classList.toggle('sidebar-hidden');
+  try { localStorage.setItem('sidebarHidden', hidden ? '1' : ''); } catch {}
+}
+const resizer = $('#sidebar-resizer');
+resizer.addEventListener('pointerdown', (e) => {
+  resizer.setPointerCapture(e.pointerId);
+  document.body.classList.add('resizing');
+});
+resizer.addEventListener('pointermove', (e) => {
+  if (resizer.hasPointerCapture(e.pointerId)) setSidebarWidth(e.clientX);
+});
+resizer.addEventListener('pointerup', (e) => {
+  resizer.releasePointerCapture(e.pointerId);
+  document.body.classList.remove('resizing');
+});
+resizer.addEventListener('dblclick', () => setSidebarWidth(SIDEBAR_DEFAULT));
+try {
+  const saved = Number(localStorage.getItem('sidebar'));
+  if (saved) setSidebarWidth(saved);
+  if (localStorage.getItem('sidebarHidden')) toggleSidebar();
+} catch {}
+
+for (const button of document.querySelectorAll('#layouts button')) {
+  button.addEventListener('click', () => setLayout(Number(button.dataset.layout)));
+}
+try {
+  const saved = Number(localStorage.getItem('layout'));
+  if ([2, 4].includes(saved)) setLayout(saved);
+} catch {}
 
 window.addEventListener('focus', () => {
   for (const project of state.projects) loadWorktrees(project).then(renderProjects);

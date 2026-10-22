@@ -19,7 +19,7 @@
 html, body { height: 100%; margin: 0; }
 body {
   display: grid;
-  grid-template-columns: 290px 1fr;
+  grid-template-columns: var(--sidebar, 290px) minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
   font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
@@ -50,6 +50,7 @@ kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 
 
 /* sidebar */
 #sidebar {
+  min-width: 0;
   background: var(--panel);
   border-right: 1px solid var(--line);
   overflow-y: auto;
@@ -92,7 +93,8 @@ kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 
 .dot.browser { background: var(--browser); }
 
 /* abas */
-main { display: grid; grid-template-rows: 34px 1fr; min-width: 0; min-height: 0; }
+/* minmax(0, 1fr): sem isso a trilha não encolhe abaixo do conteúdo (o xterm nasce com 120 colunas fixas) e vaza da janela */
+main { display: grid; grid-template-rows: 34px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
 #tabbar { display: flex; align-items: stretch; background: var(--panel); border-bottom: 1px solid var(--line); }
 #tabs { display: flex; overflow-x: auto; min-width: 0; }
 #tabs::-webkit-scrollbar { height: 3px; }
@@ -109,10 +111,31 @@ main { display: grid; grid-template-rows: 34px 1fr; min-width: 0; min-height: 0;
 .tab .close { background: none; border: none; color: var(--muted); padding: 0 4px; }
 .tab .close:hover { color: var(--danger); }
 
-#panes { position: relative; min-height: 0; }
-#empty { height: 100%; display: grid; place-content: center; text-align: center; }
-.pane { position: absolute; inset: 0; }
-.pane[hidden] { display: none; }
+/* painéis: 1, 2 lado a lado ou 2×2; a ordem de cada frame vem do slot (style.order) */
+#panes { display: grid; gap: 4px; min-height: 0; min-width: 0; background: var(--line); }
+#panes[data-layout="1"] { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+#panes[data-layout="2"] { grid-template: minmax(0, 1fr) / repeat(2, minmax(0, 1fr)); }
+#panes[data-layout="4"] { grid-template: repeat(2, minmax(0, 1fr)) / repeat(2, minmax(0, 1fr)); }
+#empty { grid-area: 1 / 1 / -1 / -1; display: grid; place-content: center; text-align: center; background: var(--bg); }
+#empty[hidden] { display: none; }
+.frame { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; background: var(--bg); outline: 1px solid transparent; outline-offset: -1px; }
+.frame[hidden] { display: none; }
+.frame.focused { outline-color: var(--accent); }
+.frame-head { display: none; align-items: center; gap: 6px; padding: 2px 6px 2px 10px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; min-width: 0; }
+#panes:not([data-layout="1"]) .frame-head { display: flex; }
+.frame.focused .frame-head { color: var(--text); }
+.frame-head .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame-head .close { background: none; border: none; color: var(--muted); padding: 0 4px; }
+.frame-head .close:hover { color: var(--danger); }
+.frame.exited .frame-head .label { text-decoration: line-through; }
+.pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; }
+.slot-empty { display: grid; place-content: center; color: var(--muted); background: var(--bg); cursor: pointer; outline: 1px solid transparent; outline-offset: -1px; }
+.slot-empty.focused { outline-color: var(--accent); }
+
+#layouts { display: flex; align-items: center; gap: 3px; padding: 0 6px; }
+#layouts button { padding: 0 6px; font-size: 14px; line-height: 20px; color: var(--muted); }
+#layouts button.on { color: var(--accent); border-color: var(--accent); }
+.tab.visible:not(.active) { color: var(--text); }
 .terminal { padding: 6px 0 0 8px; background: var(--bg); }
 .terminal .xterm, .terminal .xterm-viewport, .terminal .xterm-scrollable-element { background-color: var(--bg) !important; }
 
@@ -147,3 +170,12 @@ dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
 .context-menu button span:not(.dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-menu button .muted { margin-left: auto; }
 .menu-header { padding: 6px 8px 2px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 4px; }
+.external { flex: none; font-size: 10px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+
+/* sidebar redimensionável (arrastar a borda) e escondível (Ctrl+Shift+B) */
+#sidebar-resizer { position: fixed; top: 0; bottom: 0; left: calc(var(--sidebar, 290px) - 3px); width: 6px; cursor: col-resize; z-index: 5; }
+#sidebar-resizer:hover, body.resizing #sidebar-resizer { background: var(--accent); opacity: .5; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing webview { pointer-events: none; }
+body.sidebar-hidden { --sidebar: 0px; }
+body.sidebar-hidden #sidebar { display: none; }

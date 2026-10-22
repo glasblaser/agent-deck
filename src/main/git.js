@@ -23,6 +23,11 @@ function canonical(p) {
   }
 }
 
+// Só as worktrees em <repo>.worktrees são do app; as outras (ex.: .claude/worktrees do Claude Code) não se removem daqui.
+function isManaged(projectPath, worktreePath) {
+  return canonical(worktreePath).startsWith(canonical(`${projectPath}.worktrees`) + path.sep);
+}
+
 async function isRepo(dir) {
   try {
     return (await run(dir, ['rev-parse', '--is-inside-work-tree'])).trim() === 'true';
@@ -47,7 +52,12 @@ async function listWorktrees(projectPath) {
     }
   }
   const main = canonical(projectPath);
-  return { repo: true, worktrees: worktrees.filter((w) => canonical(w.path) !== main) };
+  return {
+    repo: true,
+    worktrees: worktrees
+      .filter((w) => canonical(w.path) !== main)
+      .map((w) => ({ ...w, managed: isManaged(projectPath, w.path) })),
+  };
 }
 
 async function createWorktree(projectPath, taskName) {
@@ -62,7 +72,7 @@ async function createWorktree(projectPath, taskName) {
 // Sem --force: se houver mudança não commitada, o git recusa e o erro volta pra tela.
 async function removeWorktree(projectPath, worktreePath) {
   const target = path.resolve(worktreePath);
-  if (!canonical(target).startsWith(canonical(`${projectPath}.worktrees`) + path.sep)) {
+  if (!isManaged(projectPath, target)) {
     throw new Error('Só removo worktrees criadas pelo app.');
   }
   await run(projectPath, ['worktree', 'remove', target]);
