@@ -193,3 +193,19 @@ body.sidebar-hidden #sidebar { display: none; }
 .tab.attention .dot { box-shadow: 0 0 0 2px var(--accent); }
 .frame-head .status { flex: none; font-size: 11px; color: var(--muted); }
 .frame-head .status.attention { color: var(--accent); font-weight: 600; }
+
+/* tarefas: commits à frente da base, arquivos sem commit, diff e briefing */
+.badge { flex: none; font-size: 10px; font-family: "Cascadia Mono", Consolas, monospace; color: var(--shell); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+.badge.dirty { color: var(--accent); }
+.dot.diff { background: var(--accent); }
+.st { display: inline-block; width: 12px; font-family: "Cascadia Mono", Consolas, monospace; font-weight: 600; }
+.st-a, .st-u { color: var(--shell); }
+.st-m, .st-t { color: var(--accent); }
+.st-d { color: var(--danger); }
+.pad { padding: 8px; }
+dialog textarea { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; font: inherit; resize: vertical; }
+dialog { width: 480px; }
+.toast.info { border-color: var(--accent); }
+/* linha de worktree: o nome da tarefa é o que importa; os botões só aparecem no hover */
+.worktrees li .actions { display: none; }
+.worktrees li:hover .actions { display: flex; }

@@ -60,6 +60,100 @@ module.exports = function smoke(app, win, outDir) {
   const tabsInfo = () => run(`JSON.stringify([...document.querySelectorAll('.tab')].map((e) =>
     [e.querySelector('.label').textContent, e.dataset.status || '-', e.dataset.session || '-', e.classList.contains('attention') ? 'terminou' : '']))`);
 
+  // AGENT_DECK_SMOKE_TASK=1: ciclo de uma tarefa num repo descartável. Cria com briefing (Claude de verdade),
+  // responde o "trust this folder", confere que o briefing só entra depois dele, abre o diff e conclui com merge.
+  if (process.env.AGENT_DECK_SMOKE_TASK) {
+    const { execFileSync } = require('node:child_process');
+    const repo = path.join(outDir, `repo-${Date.now()}`);
+    fs.mkdirSync(repo, { recursive: true });
+    const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    g(repo, 'init', '-b', 'main');
+    g(repo, 'config', 'user.email', 'smoke@local');
+    g(repo, 'config', 'user.name', 'smoke');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'linha 1\nlinha 2\n');
+    g(repo, 'add', '.');
+    g(repo, 'commit', '-m', 'init');
+    require('./store').addProject(repo);
+    const MARK = 'SMOKE-BRIEFING';
+    const writes = [];
+    const write = ptys.write;
+    ptys.write = (id, data) => { writes.push({ id, data, at: Date.now() }); write(id, data); };
+
+    win.webContents.once('did-finish-load', async () => {
+      try {
+        await sleep(2500);
+        await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('.new-task').click()`);
+        await sleep(1000);
+        log.push(`form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + (l.querySelector('select, input, textarea').value)))`)}`);
+        await run(`(() => {
+          document.querySelector('#modal [name=name]').value = 'Teste Briefing';
+          document.querySelector('#modal [name=briefing]').value = '${MARK}: responda apenas OK, sem usar ferramentas.';
+          document.querySelector('#modal-ok').click(); })()`);
+        const screen = () => run(`[...document.querySelectorAll('.frame:not([hidden]) .xterm-rows > div')].map((e) => e.textContent).join('\\n')`);
+        await run(`window.__toasts = []; new MutationObserver((list) => list.forEach((m) => m.addedNodes.forEach((n) =>
+          n.classList?.contains('toast') && __toasts.push(n.textContent)))).observe(document.body, { childList: true })`);
+        let trustedAt = null;
+        let briefingAt = null;
+        for (let i = 0; i < 90 && !briefingAt; i += 1) {
+          await sleep(1000);
+          // O diálogo aparece antes do Claude ler o teclado: responde com folga e de novo se ele continuar na tela.
+          if (/trust this folder/i.test(await screen()) && (!trustedAt || Date.now() - trustedAt > 4000)) {
+            const ptyId = Math.max(...[...ptySizes.keys()]);
+            log.push(`trust na tela; briefing já escrito no pty? ${writes.some((w) => w.data.includes(MARK))}`);
+            await sleep(2000);
+            write(ptyId, '\x1b[B');
+            await sleep(500);
+            write(ptyId, '\r');
+            trustedAt = Date.now();
+          }
+          briefingAt = writes.find((w) => w.data.includes(MARK))?.at || null;
+        }
+        log.push(`trust respondido: ${!!trustedAt}; briefing colado: ${!!briefingAt}; depois do trust: ${!!(trustedAt && briefingAt > trustedAt)} (+${briefingAt - trustedAt} ms)`);
+        const seen = [];
+        for (let i = 0; i < 90; i += 1) {
+          await sleep(1000);
+          const st = await run(`document.querySelector('.tab')?.dataset.status || '-'`);
+          if (seen.at(-1) !== st) seen.push(st);
+          if (seen.includes('busy') && st === 'idle') break;
+        }
+        log.push(`Enter depois do briefing: ${writes.some((w) => w.at > briefingAt && w.data === '\r')}`);
+        log.push(`status: ${seen.join(' -> ')}`);
+        await status('agente com briefing');
+        await shot('t1-briefing');
+
+        // O "agente" muda um arquivo e cria outro (sem commit), e o diff tem que mostrar os dois.
+        const wt = path.join(`${repo}.worktrees`, 'teste-briefing');
+        fs.writeFileSync(path.join(wt, 'a.txt'), 'linha 1\nlinha 2 mudada\n');
+        fs.writeFileSync(path.join(wt, 'novo.txt'), 'oi\n');
+        await run(`window.dispatchEvent(new Event('focus'))`);
+        await sleep(1500);
+        log.push(`sidebar: ${await run(`[...document.querySelectorAll('.worktrees li')].map((l) => l.textContent).join(' | ')`)}`);
+        await run(`document.querySelector('.worktrees li [title^="Revisar"]').click()`);
+        await sleep(4000);
+        log.push(`diff: ${await run(`JSON.stringify({ resumo: document.querySelector('.frame:not([hidden]) .toolbar .path')?.textContent,
+          arquivos: [...document.querySelectorAll('.frame:not([hidden]) .tree .file')].map((e) => e.textContent),
+          monacoDiff: !!document.querySelector('.frame:not([hidden]) .monaco-diff-editor'),
+          linhasMudadas: document.querySelectorAll('.frame:not([hidden]) .line-insert, .frame:not([hidden]) .char-insert').length })`)}`);
+        await shot('t2-diff');
+
+        await run(`[...document.querySelectorAll('.frame:not([hidden]) .toolbar button')].find((b) => b.textContent.startsWith('Concluir')).click()`);
+        await sleep(1500);
+        log.push(`concluir form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + l.querySelector('select, input, textarea').value))`)}`);
+        await run(`document.querySelector('#modal-ok').click()`);
+        await sleep(15000);
+        log.push(`depois de concluir: ${await run(`JSON.stringify({ abas: [...document.querySelectorAll('.tab .label')].map((e) => e.textContent),
+          toasts: window.__toasts, worktrees: document.querySelectorAll('.worktrees li').length })`)}`);
+        log.push(`git log: ${g(repo, 'log', '--oneline').replace(/\n/g, ' | ')}; branches: ${g(repo, 'branch').replace(/\n/g, ',')}; worktree existe: ${fs.existsSync(wt)}`);
+        await shot('t3-concluido');
+      } catch (error) {
+        log.push(`SMOKE FALHOU: ${error.stack}`);
+      }
+      fs.writeFileSync(path.join(outDir, 'console-task.txt'), log.join('\n'));
+      app.quit();
+    });
+    return;
+  }
+
   // AGENT_DECK_SMOKE_RESTORE=1 com a mesma pasta de saída: só confere a reabertura da sessão anterior.
   if (process.env.AGENT_DECK_SMOKE_RESTORE) {
     win.webContents.once('did-finish-load', async () => {

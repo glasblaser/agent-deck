@@ -103,8 +103,25 @@ function removeProject(id) {
   save();
 }
 
+// Forma comparável de um caminho: nomes curtos 8.3 (EDUARD~1) viram longos, junctions e links são
+// seguidos e caixa não importa. Para caminho que ainda não existe, resolve o ancestral mais próximo que existe.
+function canonical(p) {
+  let current = path.resolve(p);
+  const rest = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...rest).toLowerCase();
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(p).toLowerCase();
+      rest.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 function within(target, root) {
-  const rel = path.relative(root, target);
+  const rel = path.relative(canonical(root), canonical(target));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
@@ -115,7 +132,7 @@ function projectRoots() {
 
 function requireProjectPath(dir) {
   const target = path.resolve(dir);
-  if (!state.projects.some((p) => path.resolve(p.path).toLowerCase() === target.toLowerCase())) {
+  if (!state.projects.some((p) => canonical(p.path) === canonical(target))) {
     throw new Error('Projeto não registrado.');
   }
   return target;
@@ -123,7 +140,7 @@ function requireProjectPath(dir) {
 
 function requireAllowedPath(target) {
   const resolved = path.resolve(target);
-  if (!projectRoots().some((root) => within(resolved.toLowerCase(), path.resolve(root).toLowerCase()))) {
+  if (!projectRoots().some((root) => within(resolved, root))) {
     throw new Error(`Caminho fora dos projetos: ${resolved}`);
   }
   return resolved;
@@ -132,7 +149,7 @@ function requireAllowedPath(target) {
 // Terminais podem abrir também na home (ex.: login de uma conta nova).
 function requireCwd(target) {
   const resolved = path.resolve(target || HOME);
-  if (resolved.toLowerCase() === HOME.toLowerCase()) return resolved;
+  if (canonical(resolved) === canonical(HOME)) return resolved;
   return requireAllowedPath(resolved);
 }
 

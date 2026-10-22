@@ -16,8 +16,13 @@ contextBridge.exposeInMainWorld('deck', {
   },
   git: {
     worktrees: invoke('git:worktrees'),
+    branches: invoke('git:branches'),
     createWorktree: invoke('git:createWorktree'),
     removeWorktree: invoke('git:removeWorktree'),
+    diff: invoke('git:diff'),
+    diffFile: invoke('git:diffFile'),
+    conclude: invoke('git:conclude'),
+    finishTask: invoke('git:finishTask'),
   },
   pty: {
     spawn: invoke('pty:spawn'),

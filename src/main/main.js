@@ -111,12 +111,17 @@ function registerIpc() {
   handle('projects:remove', (id) => store.removeProject(id));
 
   handle('git:worktrees', (projectPath) => git.listWorktrees(store.requireProjectPath(projectPath)));
-  handle('git:createWorktree', async (projectPath, taskName) => {
-    const created = await git.createWorktree(store.requireProjectPath(projectPath), taskName);
-    return created;
-  });
+  handle('git:branches', (projectPath) => git.branches(store.requireProjectPath(projectPath)));
+  handle('git:createWorktree', (projectPath, taskName, opts) =>
+    git.createWorktree(store.requireProjectPath(projectPath), taskName, opts));
   handle('git:removeWorktree', (projectPath, worktreePath) =>
     git.removeWorktree(store.requireProjectPath(projectPath), worktreePath));
+  handle('git:diff', (projectPath, worktreePath) => git.diff(store.requireProjectPath(projectPath), worktreePath));
+  handle('git:diffFile', (projectPath, worktreePath, mergeBase, file) =>
+    git.diffFile(store.requireProjectPath(projectPath), worktreePath, mergeBase, file));
+  handle('git:conclude', (projectPath, worktreePath, opts) =>
+    git.conclude(store.requireProjectPath(projectPath), worktreePath, opts));
+  handle('git:finishTask', (projectPath, worktreePath) => git.finishTask(store.requireProjectPath(projectPath), worktreePath));
 
   handle('pty:spawn', (opts) => {
     const profile = opts.profileId ? store.profile(opts.profileId) : null;

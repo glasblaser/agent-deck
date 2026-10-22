@@ -39,6 +39,24 @@ AGENT_DECK_SMOKE=/caminho/saida npm start
 - "Login" abre um terminal com a conta: Claude pede login sozinho (ou `/login`), Codex roda `codex login`.
 - Nada de trocar arquivo de credencial de lugar: cada conta tem o seu diretório, sempre.
 
+### Tarefas (worktree do começo ao fim)
+
+- **Criar**: "+ nova tarefa" pede nome, **base** (de onde sai e para onde volta) e um **briefing** opcional.
+  No Claude, o briefing é enviado como primeira mensagem assim que ele chega no prompt, depois do diálogo
+  "trust this folder" (o sinal é o arquivo de sessão, que só nasce após o diálogo). No Codex, que não
+  publica status, ele vai para a área de transferência.
+- Base e briefing ficam no próprio git: `branch.<b>.deckbase` e `branch.<b>.description`.
+- **Sidebar**: `↑N` = commits à frente da base, `●N` = arquivos sem commit. Botões no hover.
+- **± Diff**: tudo que a tarefa mudou desde a base, commitado ou não, no diff do Monaco.
+- **✓ Concluir**: commita o que sobrou (pede a mensagem), checa conflito antes (`git merge-tree`) e faz
+  merge `--no-ff`, squash ou PR (`git push` + `gh pr create`). Em merge/squash, fecha as abas da tarefa,
+  remove a worktree e apaga a branch, mas só se tudo dela já estiver na base. Se der conflito, nada é tocado
+  e a mensagem diz o que pedir ao agente. PR deixa a worktree; conclua de novo depois do merge para limpar.
+
+Teste do ciclo (cria repo descartável, abre Claude de verdade com briefing, diff, concluir):
+`AGENT_DECK_SMOKE=<pasta curta> AGENT_DECK_SMOKE_TASK=1 npm start`. Use pasta curta: o git no Windows
+falha em caminho muito longo. O teste marca a pasta temporária como confiável no `~/.claude.json`.
+
 ### No dia a dia
 
 - **Painéis**: 1, 2 lado a lado ou 4 (2×2) — botões no canto da barra de abas ou Ctrl+Shift+1/2/4.

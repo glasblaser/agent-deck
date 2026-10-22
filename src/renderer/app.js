@@ -31,19 +31,29 @@ function h(tag, attrs = {}, ...children) {
 const basename = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || p;
 const profileById = (id) => state.profiles.find((p) => p.id === id);
 
-function toast(message) {
-  const el = h('div', { class: 'toast' }, message);
+function toast(message, kind = 'error') {
+  const el = h('div', { class: `toast ${kind}` }, message);
   document.body.append(el);
   setTimeout(() => el.remove(), 6000);
 }
+
+const errorText = (error) => String(error?.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 async function attempt(fn) {
   try {
     return await fn();
   } catch (error) {
-    toast(String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    toast(errorText(error));
     return undefined;
   }
+}
+
+// Mesma pasta ou dentro dela (Windows: sem diferença de maiúsculas nem de barra).
+function isInside(child, parent) {
+  const norm = (p) => String(p).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  const c = norm(child);
+  const p = norm(parent);
+  return c === p || c.startsWith(`${p}\\`);
 }
 
 // Formulário modal genérico (Electron não tem window.prompt).
@@ -61,6 +71,9 @@ function form(title, fields, okLabel = 'OK') {
       input = h('select', { name: field.name },
         field.options.map((o) => h('option', { value: o.value, selected: o.value === field.value }, o.label)));
       if (field.onChange) input.addEventListener('change', () => field.onChange(input.value, inputs));
+    } else if (field.type === 'textarea') {
+      input = h('textarea', { name: field.name, rows: 5, placeholder: field.placeholder || '', required: field.required });
+      input.value = field.value || '';
     } else {
       input = h('input', { name: field.name, value: field.value || '', placeholder: field.placeholder || '', required: field.required });
     }
@@ -211,6 +224,7 @@ async function restoreSession() {
       const slot = Number.isInteger(t.slot) && t.slot < layout ? t.slot : -1;
       if (t.type === 'browser') openBrowser(t.url, slot);
       else if (t.type === 'editor') openEditor(t.cwd, slot);
+      else if (t.type === 'diff') openDiff(t.projectPath, t.cwd, slot);
       else {
         const agent = ['claude', 'codex'].includes(t.type) ? t.type : null;
         openTerminal({ cwd: t.cwd, profileId: t.profileId, agent, resumeId: agent && t.sessionId, slot });
@@ -275,7 +289,8 @@ const AGENTS = {
   'codex-login': { label: 'Login Codex', kind: 'codex' },
 };
 
-function openTerminal({ cwd, profileId, agent, resumeId, slot }) {
+// briefing: primeira mensagem para o Claude, enviada quando ele chega no prompt (ver deliverBriefing).
+function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing }) {
   const pane = h('div', { class: 'terminal' });
   const term = new Terminal({
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
@@ -298,6 +313,7 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot }) {
     cwd,
     term,
     isAgent: !!agent && agent !== 'codex-login',
+    briefing: agent === 'claude' ? briefing || null : null,
     // Reabre como estava: agente com o id da conversa, terminal na mesma pasta e conta. Login não volta.
     persist: () => (agent === 'codex-login' ? null
       : { type: agent || 'terminal', cwd, profileId: profileId || null, sessionId: tab.sessionId || null }),
@@ -434,7 +450,28 @@ function contextMenu(x, y, items) {
   addEventListener('blur', close);
 }
 
-deck.pty.onData((id, data) => terminalsByPty.get(id)?.term.write(data));
+deck.pty.onData((id, data) => {
+  const entry = terminalsByPty.get(id);
+  if (!entry) return;
+  entry.tab.lastOutput = Date.now();
+  entry.term.write(data);
+});
+
+// Briefing de tarefa nova: cola e envia quando o Claude chega no prompt. O sinal é o primeiro
+// status do arquivo de sessão, que só nasce depois do diálogo "trust this folder" (worktree nova
+// sempre passa por ele); o bracketed paste não serve, o próprio pwsh já liga. Antes disso, o texto
+// cairia no diálogo. Espera ainda a tela parar de mudar, para não colar no meio do desenho do prompt.
+function deliverBriefing(tab) {
+  const text = tab.briefing;
+  tab.briefing = null;
+  const tick = () => {
+    if (!tab.ptyId) return;
+    if (Date.now() - (tab.lastOutput || 0) < 800) return setTimeout(tick, 200);
+    tab.term.paste(text);
+    setTimeout(() => tab.ptyId && deck.pty.write(tab.ptyId, '\r'), 400);
+  };
+  tick();
+}
 // Status vindo do main: id de sessão (pode mudar com /clear ou /resume) e trabalhando/ocioso.
 // Agente que termina numa aba que você não está olhando ganha o aviso "terminou" até receber foco.
 deck.pty.onStatus((id, info) => {
@@ -444,6 +481,7 @@ deck.pty.onStatus((id, info) => {
   if (tab.status === 'busy' && info.status === 'idle' && tab !== activeTab) tab.attention = true;
   tab.status = info.status;
   if (info.sessionId) tab.sessionId = info.sessionId;
+  if (tab.briefing && info.status === 'idle') deliverBriefing(tab);
   renderTabs();
   if (sessionChanged) saveSession();
 });
@@ -499,6 +537,7 @@ async function openEditor(root, slot) {
     title: `Editor · ${basename(root)}`,
     tooltip: root,
     kindClass: 'editor',
+    cwd: root,
     persist: () => ({ type: 'editor', cwd: root }),
     onShow: () => editor?.layout(),
     isDirty: () => [...models.values()].some((m) => m.dirty()),
@@ -581,6 +620,103 @@ async function openEditor(root, slot) {
   }
 
   await renderDir(root, tree, 0);
+  return tab;
+}
+
+// ---------- diff da tarefa ----------
+
+const STATUS_NAME = { A: 'adicionado', M: 'modificado', D: 'apagado', T: 'tipo mudou', '?': 'novo, sem git add' };
+
+// Tudo que a worktree mudou desde que saiu da base, commitado ou não, lado a lado.
+async function openDiff(projectPath, worktreePath, slot) {
+  const list = h('div', { class: 'tree' });
+  const summary = h('span', { class: 'path muted' }, 'Carregando…');
+  const host = h('div', { class: 'monaco' });
+  const concludeButton = h('button', { class: 'primary', title: 'Integrar na base e limpar' }, 'Concluir tarefa…');
+  const pane = h('div', { class: 'editor' },
+    h('div', { class: 'toolbar' },
+      summary,
+      h('span', { class: 'spacer' }),
+      h('button', { title: 'Ler de novo o que mudou', onclick: () => refresh() }, '↻ Atualizar'),
+      concludeButton),
+    h('div', { class: 'editor-body' }, list, host));
+
+  let editor;
+  let data;
+  let current = null;
+  const disposeModels = () => {
+    const models = editor?.getModel();
+    editor?.setModel(null);
+    models?.original.dispose();
+    models?.modified.dispose();
+  };
+  const tab = addTab({
+    pane,
+    title: `Diff · ${basename(worktreePath)}`,
+    tooltip: worktreePath,
+    kindClass: 'diff',
+    cwd: worktreePath,
+    persist: () => ({ type: 'diff', cwd: worktreePath, projectPath }),
+    onShow: () => editor?.layout(),
+    dispose: () => {
+      disposeModels();
+      editor?.dispose();
+    },
+  }, slot);
+
+  concludeButton.addEventListener('click', () => {
+    const project = state.projects.find((p) => p.path === projectPath);
+    const wt = (worktreesByProject.get(project?.id) || []).find((w) => isInside(w.path, worktreePath));
+    if (!project || !wt) return toast('Essa worktree não está mais na lista do projeto.');
+    if (!wt.managed) return toast('Worktree criada fora do app: conclua por onde ela foi criada.');
+    concludeTask(project, wt);
+  });
+
+  const monaco = await loadMonaco();
+  editor = monaco.editor.createDiffEditor(host, {
+    theme: 'vs-dark',
+    automaticLayout: true,
+    readOnly: true,
+    originalEditable: false,
+    fontFamily: '"Cascadia Code", Consolas, monospace',
+    fontSize: 13,
+    minimap: { enabled: false },
+  });
+
+  async function show(file) {
+    const content = await attempt(() => deck.git.diffFile(projectPath, worktreePath, data.mergeBase, file.path));
+    if (!content) return;
+    current = file.path;
+    disposeModels();
+    // Uri por aba e lado: o Monaco tira a linguagem da extensão e não aceita dois modelos com a mesma.
+    const uri = (side) => monaco.Uri.from({ scheme: 'diff', path: `/${tab.id}/${side}/${file.path}` });
+    editor.setModel({
+      original: monaco.editor.createModel(content.original, undefined, uri('a')),
+      modified: monaco.editor.createModel(content.modified, undefined, uri('b')),
+    });
+    for (const el of list.querySelectorAll('.file')) el.classList.toggle('selected', el.dataset.path === file.path);
+  }
+
+  async function refresh() {
+    data = await attempt(() => deck.git.diff(projectPath, worktreePath));
+    if (!data) {
+      summary.textContent = 'Não foi possível ler o diff.';
+      return;
+    }
+    summary.textContent = `${data.branch} vs ${data.base} · ${data.files.length} arquivo(s)`;
+    list.replaceChildren(...data.files.map((f) => h('div', {
+      class: 'file', 'data-path': f.path, title: `${f.path} (${STATUS_NAME[f.status] || f.status})`, onclick: () => show(f),
+    }, h('span', { class: `st st-${f.status === '?' ? 'u' : f.status.toLowerCase()}` }, f.status === '?' ? 'U' : f.status), ' ', f.path)));
+    if (!data.files.length) {
+      disposeModels();
+      list.append(h('div', { class: 'muted hint pad' }, 'Nada mudou em relação à base.'));
+      return;
+    }
+    const again = data.files.find((f) => f.path === current) || data.files[0];
+    await show(again);
+  }
+
+  await refresh();
   return tab;
 }
 
@@ -677,9 +813,14 @@ function renderProjects() {
         ? h('button', { class: 'new-task', onclick: () => newTask(project) }, '+ nova tarefa (worktree)')
         : h('div', { class: 'muted hint' }, 'Sem git: worktrees indisponíveis'),
       h('ul', { class: 'worktrees' }, worktrees.map((wt) =>
-        h('li', { class: 'row', title: wt.path },
-          h('span', { class: 'branch' }, wt.branch || basename(wt.path)),
+        h('li', { class: 'row', title: [wt.path, wt.description].filter(Boolean).join('\n\n') },
+          h('span', { class: 'branch' }, (wt.branch || basename(wt.path)).replace(/^task\//, '')),
+          wt.ahead ? h('span', { class: 'badge', title: `${wt.ahead} commit(s) à frente de ${wt.base}` }, `↑${wt.ahead}`) : null,
+          wt.dirty ? h('span', { class: 'badge dirty', title: `${wt.dirty} arquivo(s) sem commit` }, `●${wt.dirty}`) : null,
           agentButtons(wt.path),
+          h('span', { class: 'actions' },
+            h('button', { title: 'Revisar o que a tarefa mudou (diff)', onclick: () => openDiff(project.path, wt.path) }, '±'),
+            wt.managed ? h('button', { title: 'Concluir tarefa: integrar na base e limpar', onclick: () => concludeTask(project, wt) }, '✓') : null),
           wt.managed
             ? h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')
             : h('span', { class: 'external muted small', title: `Criada fora do app (${wt.path}); remova por onde ela foi criada.` }, 'externa')))));
@@ -699,8 +840,18 @@ async function removeProject(project) {
 }
 
 async function newTask(project) {
+  const branches = await attempt(() => deck.git.branches(project.path));
+  if (!branches) return;
   const values = await form(`Nova tarefa em ${project.name}`, [
     { name: 'name', label: 'Nome da tarefa (vira branch task/<nome>)', placeholder: 'ex.: corrigir-login', required: true },
+    {
+      name: 'base', label: 'Sai de (base, onde ela volta no final)', type: 'select', value: branches.current,
+      options: branches.list.map((b) => ({ value: b, label: b })),
+    },
+    {
+      name: 'briefing', label: 'O que fazer (opcional: vai como primeira mensagem do agente)', type: 'textarea',
+      placeholder: 'ex.: O login quebra quando o e-mail tem maiúscula. Corrija e cubra com teste.',
+    },
     {
       name: 'agent', label: 'Agente', type: 'select', value: 'claude',
       options: [{ value: 'claude', label: 'Claude' }, { value: 'codex', label: 'Codex' }, { value: '', label: 'Só terminal' }],
@@ -709,11 +860,86 @@ async function newTask(project) {
     { name: 'profile', label: 'Conta', type: 'select', options: profileOptions('claude'), value: defaultProfile('claude')?.id },
   ], 'Criar');
   if (!values?.name) return;
-  const created = await attempt(() => deck.git.createWorktree(project.path, values.name));
+  const created = await attempt(() => deck.git.createWorktree(project.path, values.name, { base: values.base, briefing: values.briefing }));
   if (!created) return;
   await loadWorktrees(project);
   renderProjects();
-  openTerminal({ cwd: created.path, agent: values.agent || null, profileId: values.agent ? values.profile : null });
+  const agent = values.agent || null;
+  openTerminal({ cwd: created.path, agent, profileId: agent ? values.profile : null, briefing: values.briefing });
+  // O Codex não publica quando chega no prompt: o briefing vai pela área de transferência.
+  if (values.briefing && agent !== 'claude') {
+    navigator.clipboard.writeText(values.briefing);
+    toast('Briefing copiado: cole com Ctrl+V quando o agente abrir.', 'info');
+  }
+}
+
+// Fecha as abas da tarefa e remove worktree + branch. As abas saem antes: no Windows, pasta que
+// é cwd de um shell não pode ser apagada. O shell demora um pouco a soltar, daí as tentativas.
+async function finishTask(project, wt) {
+  const here = tabs.filter((t) => t.cwd && isInside(t.cwd, wt.path));
+  for (const t of here) closeTab(t);
+  if (here.some((t) => tabs.includes(t))) return toast('Feche as abas da tarefa para remover a worktree.');
+  let result;
+  for (let i = 0; i < 6 && !result; i += 1) {
+    if (i) await new Promise((r) => setTimeout(r, 700));
+    try {
+      result = await deck.git.finishTask(project.path, wt.path);
+    } catch (error) {
+      if (i === 5 || /modified or untracked/.test(error.message)) {
+        toast(errorText(error));
+        break;
+      }
+    }
+  }
+  await loadWorktrees(project);
+  renderProjects();
+  return result;
+}
+
+async function concludeTask(project, wt) {
+  await loadWorktrees(project);
+  renderProjects();
+  wt = (worktreesByProject.get(project.id) || []).find((w) => isInside(w.path, wt.path)) || wt;
+  if (!wt.ahead && !wt.dirty) {
+    if (!confirm(`${wt.branch} não tem nada além de ${wt.base}. Fechar as abas dela e remover worktree e branch?`)) return;
+    const done = await finishTask(project, wt);
+    if (done) toast(`${wt.branch} removida.`, 'info');
+    return;
+  }
+  const fields = [{
+    name: 'mode', label: `Integrar ${wt.branch} em ${wt.base}`, type: 'select', value: 'merge',
+    options: [
+      { value: 'merge', label: 'Merge local (mantém os commits)' },
+      { value: 'squash', label: 'Squash local (um commit só)' },
+      { value: 'pr', label: 'Pull request no GitHub (push + gh pr create)' },
+    ],
+  }];
+  if (wt.dirty) {
+    fields.push({
+      name: 'message', label: `${wt.dirty} arquivo(s) sem commit: entram num commit com a mensagem`,
+      value: wt.description?.split('\n')[0] || '', required: true,
+    });
+  }
+  const values = await form(`Concluir ${wt.branch}`, fields, 'Concluir');
+  if (!values) return;
+  const res = await attempt(() => deck.git.conclude(project.path, wt.path, values));
+  if (!res) {
+    // O commit das pendências pode ter entrado antes da falha: atualiza os contadores.
+    await loadWorktrees(project);
+    return renderProjects();
+  }
+  if (res.mode === 'pr') {
+    await loadWorktrees(project);
+    renderProjects();
+    toast(`PR aberto para ${res.branch} → ${res.base}. A worktree fica até o merge; depois conclua de novo para limpar.`, 'info');
+    if (res.url) openBrowser(res.url);
+    return;
+  }
+  const done = await finishTask(project, wt);
+  if (!done) return toast(`${res.branch} foi integrada em ${res.base}, mas a worktree não saiu. Remova pelo ×.`);
+  toast(res.mode === 'nothing'
+    ? `${res.branch} não tinha nada além de ${res.base}. Worktree removida${done.branchKept ? '' : ' e branch apagada'}.`
+    : `${res.branch} integrada em ${res.base}. Worktree removida${done.branchKept ? '; a branch ficou' : ' e branch apagada'}.`, 'info');
 }
 
 async function removeWorktree(project, wt) {
