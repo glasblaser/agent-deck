@@ -198,6 +198,9 @@ if (process.env.AGENT_DECK_SMOKE) app.setPath('userData', path.join(process.env.
 app.setAppUserModelId('Agent Deck');
 
 app.whenReady().then(() => {
+  // Ditado (Wispr Flow e afins) escreve no campo focado via UI Automation. Sem isso o Chromium só liga
+  // a acessibilidade quando acha um leitor de tela, e para o Windows o campo focado é um "Pane" sem texto.
+  app.setAccessibilitySupportEnabled(true);
   protocol.handle('app', serveApp);
   store.load(app.getPath('userData'));
   registerIpc();

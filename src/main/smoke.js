@@ -63,6 +63,33 @@ module.exports = function smoke(app, win, outDir) {
   const tabsInfo = () => run(`JSON.stringify([...document.querySelectorAll('.tab')].map((e) =>
     [e.querySelector('.label').textContent, e.dataset.status || '-', e.dataset.session || '-', e.classList.contains('attention') ? 'terminou' : '']))`);
 
+  // AGENT_DECK_SMOKE_A11Y=<script.ps1>: ditado. Abre o form da fila, foca o nome e roda o script, que escreve
+  // no campo focado por UI Automation (o caminho do Wispr Flow e afins); depois lê o que chegou no campo.
+  if (process.env.AGENT_DECK_SMOKE_A11Y) {
+    win.webContents.once('did-finish-load', async () => {
+      try {
+        await sleep(3000);
+        await run(`document.querySelector('.add-todo').click()`);
+        await sleep(800);
+        win.show();
+        win.focus();
+        await run(`document.querySelector('#modal [name=name]').focus()`);
+        await sleep(500);
+        // Assíncrono: com o main travado (execFileSync) o Electron não responde ao UI Automation e o teste mente.
+        const out = await new Promise((resolve) => require('node:child_process').execFile('powershell.exe',
+          ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', process.env.AGENT_DECK_SMOKE_A11Y], { encoding: 'utf8' }, (_e, stdout) => resolve(stdout || '')));
+        log.push(`uia: ${out.trim().replace(/\r?\n/g, ' | ')}`);
+        await sleep(500);
+        log.push(`campo nome no app: ${JSON.stringify(await run(`document.querySelector('#modal [name=name]').value`))}`);
+      } catch (error) {
+        log.push(`SMOKE FALHOU: ${error.stack}`);
+      }
+      fs.writeFileSync(path.join(outDir, 'console-a11y.txt'), log.join('\n'));
+      app.quit();
+    });
+    return;
+  }
+
   // AGENT_DECK_SMOKE_TASK=1: ciclo de uma tarefa num repo descartável. Cria com briefing (Claude de verdade),
   // responde o "trust this folder", confere que o briefing só entra depois dele, abre o diff e conclui com merge.
   if (process.env.AGENT_DECK_SMOKE_TASK) {
