@@ -34,6 +34,7 @@ function card(task, actions, h) {
   const said = agent?.lastMessage;
   return h('article', {
     class: `card col-${task.column} ${task.agents.some((a) => a.state === 'done') ? 'done' : ''}`,
+    style: agent?.account ? `--account: ${agent.account.color}` : null,
     title: [task.wt?.path || task.project.path, task.briefing].filter(Boolean).join('\n\n'),
     onclick: () => (agent ? actions.focus(agent.tab) : actions.openAgent(task)),
   },
@@ -46,7 +47,8 @@ function card(task, actions, h) {
       class: `agent st-${a.state || 'off'}`,
       onclick: (e) => { e.stopPropagation(); actions.focus(a.tab); },
     }, h('span', { class: `dot ${a.tab.kindClass} ${a.state === 'busy' || a.state === 'waiting' ? 'busy' : ''}` }),
-    h('span', { class: 'who' }, a.tab.agentLabel || a.tab.title),
+    a.account ? h('span', { class: 'account-tag', style: `--account: ${a.account.color}`, title: `Conta: ${a.account.name}` }, a.account.name) : null,
+    h('span', { class: 'who' }, a.tab.kindClass === 'codex' ? 'Codex' : 'Claude'),
     h('span', { class: 'state', title: a.since ? new Date(a.since).toLocaleString('pt-BR') : '' },
       [STATE_TEXT[a.state] || 'parado', ago(a.since)].filter(Boolean).join(' · ')))))
     : h('p', { class: 'muted small' }, 'Nenhum agente aberto.'),

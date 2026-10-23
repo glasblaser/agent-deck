@@ -269,3 +269,26 @@ dialog { width: 480px; }
 .card { min-width: 0; }
 .card footer { flex-wrap: wrap; row-gap: 4px; }
 .card footer button { white-space: nowrap; }
+
+/* paleta de comandos */
+.palette-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .35); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; }
+.palette { width: min(640px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 40px rgba(0, 0, 0, .55); overflow: hidden; }
+.palette-input { width: 100%; background: var(--bg); color: var(--text); border: none; border-bottom: 1px solid var(--line); padding: 12px 14px; font: 15px "Segoe UI", system-ui, sans-serif; outline: none; }
+.palette-list { list-style: none; margin: 0; padding: 4px; max-height: 50vh; overflow-y: auto; }
+.palette-list li { display: flex; align-items: baseline; gap: 10px; padding: 6px 10px; border-radius: 5px; cursor: pointer; min-width: 0; }
+.palette-list li.selected { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+.palette-list .group { flex: none; width: 70px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.palette-list .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-list .hint { margin-left: auto; flex: none; font-size: 12px; }
+.palette-list .empty { cursor: default; }
+
+/* cor por conta: faixa no card do quadro, sublinhado na aba, cabeçalho do painel, borda na sidebar */
+.account { border-left-color: var(--account, var(--line)) !important; }
+.account-color { width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; flex: none; }
+.account-color::-webkit-color-swatch-wrapper { padding: 0; }
+.account-color::-webkit-color-swatch { border: none; border-radius: 3px; }
+.tab[data-account] { border-bottom: 3px solid var(--account); }
+.frame-head { border-left: 4px solid var(--account, transparent); }
+.card[style*="--account"] { border-left: 4px solid var(--account); }
+.card .account-tag { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; font-weight: 600; color: #15171b; background: var(--account); border-radius: 3px; padding: 0 5px; }

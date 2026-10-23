@@ -123,6 +123,16 @@ function addProfile({ name, kind }) {
 }
 
 // Remove só do app; o diretório (e o login dentro dele) fica no disco.
+// Cor da conta (#rrggbb); vazio volta para a cor automática.
+function setProfileColor(id, color) {
+  const found = profile(id);
+  if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error('Cor inválida.');
+  if (color) found.color = color.toLowerCase();
+  else delete found.color;
+  save();
+  return publicState();
+}
+
 function removeProfile(id) {
   state.profiles = state.profiles.filter((p) => p.id !== id);
   save();
@@ -206,7 +216,7 @@ function requireCwd(target) {
 }
 
 module.exports = {
-  load, publicState, profile, addProfile, removeProfile, addProject, removeProject, getSession, saveSession,
+  load, publicState, profile, addProfile, removeProfile, setProfileColor, addProject, removeProject, getSession, saveSession,
   addBacklog, updateBacklog, removeBacklog, recordDone, removeDone,
   requireProjectPath, requireAllowedPath, requireCwd, slug, HOME,
 };

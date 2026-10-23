@@ -1,7 +1,8 @@
 // UI do Agent Deck: sidebar (projetos/worktrees, contas/uso) e abas (terminal, editor, navegador).
 import { Terminal } from '/xterm/lib/xterm.mjs';
 import { FitAddon } from '/xterm-fit/lib/addon-fit.mjs';
-import { renderBoard } from './views.js';
+import { renderBoard, mainAgent } from './views.js';
+import { openPalette } from './palette.js';
 
 const deck = window.deck;
 const $ = (sel) => document.querySelector(sel);
@@ -31,6 +32,13 @@ function h(tag, attrs = {}, ...children) {
 
 const basename = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || p;
 const profileById = (id) => state.profiles.find((p) => p.id === id);
+
+// Cor de cada conta: a escolhida no card da conta ou uma automática pela ordem. Fora da paleta:
+// vermelho e amarelo puros, que já querem dizer "esperando você" e "terminou".
+const ACCOUNT_COLORS = ['#c792ea', '#89ddff', '#c3e88d', '#f78c6c', '#ff9cac', '#82aaff', '#80cbc4', '#a1887f'];
+const profileColor = (profile) => profile?.color || (profile ? ACCOUNT_COLORS[Math.max(0, state.profiles.indexOf(profile)) % ACCOUNT_COLORS.length] : null);
+// Conta de uma aba de agente: a escolhida ao abrir, ou a padrão do tipo.
+const tabProfile = (tab) => (tab.isAgent ? profileById(tab.profileId) || defaultProfile(tab.kindClass) : profileById(tab.profileId)) || null;
 
 function toast(message, kind = 'error') {
   const el = h('div', { class: `toast ${kind}` }, message);
@@ -280,6 +288,8 @@ function renderTabs() {
       title: [tab.tooltip || tab.title, stateText(tab)].filter(Boolean).join(' · '),
       'data-status': tab.status || null,
       'data-session': tab.sessionId || null,
+      'data-account': tabProfile(tab)?.name || null,
+      style: tabProfile(tab) ? `--account: ${profileColor(tabProfile(tab))}` : null,
       onclick: () => activate(tab),
       onauxclick: (e) => e.button === 1 && closeTab(tab),
     },
@@ -290,6 +300,8 @@ function renderTabs() {
     tab.headLabel.textContent = tab.title;
     tab.headLabel.title = tab.tooltip || tab.title;
     tab.headDot.className = `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}`;
+    const account = tabProfile(tab);
+    tab.frame.style.setProperty('--account', account ? profileColor(account) : 'transparent');
     tab.headStatus.textContent = stateText(tab);
     tab.headStatus.classList.toggle('attention', !!tab.attention);
     tab.headStatus.classList.toggle('waiting', tab.status === 'waiting');
@@ -332,6 +344,7 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing }) {
     title: [what, profile?.name, basename(cwd)].filter(Boolean).join(' · '),
     agentLabel: [what, profile?.name].filter(Boolean).join(' · '),
     tooltip: cwd,
+    profileId: profileId || null,
     kindClass: agent ? AGENTS[agent].kind : 'shell',
     cwd,
     term,
@@ -894,7 +907,11 @@ function renderProjects() {
 function taskModel() {
   const list = [];
   const agentsIn = (match) => tabs.filter((t) => t.isAgent && t.cwd && match(t.cwd))
-    .map((tab) => ({ tab, state: agentState(tab), since: tab.statusSince || null, lastMessage: tab.lastMessage || null }));
+    .map((tab) => {
+      const account = tabProfile(tab);
+      return { tab, state: agentState(tab), since: tab.statusSince || null, lastMessage: tab.lastMessage || null,
+        account: account && { name: account.name, color: profileColor(account) } };
+    });
   const columnOf = (agents, changed) => {
     const states = agents.map((a) => a.state);
     if (states.includes('waiting')) return 'waiting';
@@ -1247,10 +1264,21 @@ function renderAccounts() {
         h('div', { class: 'bar' }, h('div', { class: `fill ${w.used >= 90 ? 'hot' : w.used >= 70 ? 'warm' : ''}`, style: `width:${w.used}%` })),
         h('div', { class: 'muted small' }, formatReset(w.resetsAt))))
       : [h('div', { class: `muted small ${usage?.status === 'error' ? 'error' : ''}` }, usage ? usage.message : 'Carregando…')];
-    return h('div', { class: `account ${profile.kind}` },
+    return h('div', { class: `account ${profile.kind}`, style: `--account: ${profileColor(profile)}` },
       h('div', { class: 'row' },
         h('span', { class: `dot ${profile.kind}` }),
         h('strong', {}, profile.name),
+        h('input', {
+          type: 'color', class: 'account-color', value: profileColor(profile),
+          title: 'Cor dessa conta nas abas e no quadro (clique para trocar)',
+          onchange: async (e) => {
+            const next = await attempt(() => deck.profiles.setColor(profile.id, e.target.value));
+            if (!next) return;
+            state.profiles = next.profiles;
+            renderAccounts();
+            renderTabs();
+          },
+        }),
         usage?.plan ? h('span', { class: 'plan' }, usage.plan) : null,
         h('button', { title: 'Abrir agente com essa conta', onclick: () => newTabDialog({ type: profile.kind, profileId: profile.id }) }, '▶'),
         h('button', { title: 'Fazer login nessa conta', onclick: () => loginProfile(profile) }, 'Login'),
@@ -1311,9 +1339,55 @@ $('#add-profile').addEventListener('click', addProfile);
 $('#refresh-usage').addEventListener('click', () => refreshUsage(true));
 $('#new-tab').addEventListener('click', () => newTabDialog());
 $('#open-board').addEventListener('click', () => openBoard());
+$('#open-palette').addEventListener('click', () => showPalette());
+
+// ---------- paleta de comandos ----------
+
+// Tudo que dá para fazer pelo teclado: abas, tarefas (e diff/concluir de cada uma), fila, projetos, layout.
+function paletteCommands() {
+  const cmds = [];
+  const add = (group, label, run, hint) => cmds.push({ group, label, run, hint });
+  for (const tab of tabs) add('Aba', tab.title, () => activate(tab), stateText(tab));
+  for (const task of taskModel()) {
+    const agent = mainAgent(task);
+    const where = task.project.name;
+    add('Tarefa', task.name, () => (agent ? activate(agent.tab) : taskActions.openAgent(task)),
+      [where, agent ? STATE_LABEL[agent.state] || 'no prompt' : 'sem agente'].join(' · '));
+    if (task.wt) add('Diff', task.name, () => taskActions.diff(task), where);
+    if (task.managed) add('Concluir', task.name, () => taskActions.conclude(task), where);
+  }
+  for (const item of state.backlog || []) {
+    add('Começar', item.name, () => taskActions.startTodo(item), state.projects.find((p) => p.id === item.projectId)?.name);
+  }
+  add('Comando', 'Nova tarefa', () => newTaskAnywhere());
+  add('Comando', 'Adicionar à fila (A fazer)', () => editTodo());
+  add('Comando', 'Quadro', () => openBoard(), 'Ctrl+Shift+Q');
+  add('Comando', 'Nova aba', () => newTabDialog(), 'Ctrl+T');
+  for (const project of state.projects) {
+    add('Projeto', `Claude em ${project.name}`, () => newTabDialog({ cwd: project.path, type: 'claude' }));
+    add('Projeto', `Codex em ${project.name}`, () => newTabDialog({ cwd: project.path, type: 'codex' }));
+    add('Projeto', `Terminal em ${project.name}`, () => openTerminal({ cwd: project.path }));
+    add('Projeto', `Editor em ${project.name}`, () => openEditor(project.path));
+    if (project.isRepo) add('Projeto', `Nova tarefa em ${project.name}`, () => newTask(project));
+  }
+  for (const n of [1, 2, 4]) add('Layout', `${n === 1 ? 'Um painel' : n === 2 ? 'Dois lado a lado' : 'Quatro (2×2)'}`, () => setLayout(n), `Ctrl+Shift+${n}`);
+  add('Layout', 'Mostrar/esconder barra lateral', () => toggleSidebar(), 'Ctrl+Shift+B');
+  return cmds;
+}
+
+const showPalette = () => openPalette(paletteCommands(), h);
 
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey) return;
+  // Ctrl+Shift+P de qualquer lugar. Ctrl+K só fora do terminal e do editor: no prompt do agente ele
+  // apaga até o fim da linha, e no Monaco começa atalhos de duas teclas.
+  if ((e.code === 'KeyP' && e.shiftKey && !e.altKey)
+    || (e.code === 'KeyK' && !e.shiftKey && !e.altKey && !document.activeElement?.closest('.terminal, .monaco'))) {
+    e.preventDefault();
+    e.stopPropagation();
+    showPalette();
+    return;
+  }
   if (e.key === 't' && !e.shiftKey) {
     e.preventDefault();
     newTabDialog();

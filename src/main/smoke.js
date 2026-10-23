@@ -86,6 +86,21 @@ module.exports = function smoke(app, win, outDir) {
       try {
         await sleep(2500);
         log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)')))`)}`);
+        const key = (keyCode, modifiers = []) => {
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+        };
+        win.focus();
+        await sleep(300);
+        key('P', ['control', 'shift']);
+        await sleep(500);
+        log.push(`paleta (Ctrl+Shift+P): aberta=${await run('!!document.querySelector(".palette")')} itens=${await run('document.querySelectorAll(".palette-list li").length')}`);
+        await run(`(() => { const i = document.querySelector('.palette-input'); i.value = 'nova tar'; i.dispatchEvent(new Event('input')); })()`);
+        await sleep(200);
+        log.push(`paleta "nova tar": ${await run(`JSON.stringify([...document.querySelectorAll('.palette-list li')].slice(0, 3).map((li) => li.textContent))`)}`);
+        key('Escape');
+        await sleep(300);
+        log.push(`paleta depois do Esc: aberta=${await run('!!document.querySelector(".palette")')}`);
         // Cria pela fila do quadro: "+ adicionar à fila" -> card em "A fazer" -> "▶ Começar" -> form já preenchido.
         const waitFor = async (js) => {
           for (let i = 0; i < 30 && !(await run(js)); i += 1) await sleep(500);
@@ -134,7 +149,9 @@ module.exports = function smoke(app, win, outDir) {
             [c.querySelector('h3').firstChild.textContent, [...c.querySelectorAll('.card')].map((k) => k.querySelector('header strong').textContent
               + ' [' + [...k.querySelectorAll('.agent .state')].map((e) => e.textContent).join(',') + ']'
               + [...k.querySelectorAll('.badge')].map((b) => ' ' + b.textContent).join('')
-              + (k.querySelector('.said') ? ' «' + k.querySelector('.said').textContent.slice(0, 80) + '»' : ''))])))`)}`);
+              + (k.querySelector('.said') ? ' «' + k.querySelector('.said').textContent.slice(0, 80) + '»' : '')
+              + (k.querySelector('.account-tag') ? ' {conta ' + k.querySelector('.account-tag').textContent + ' ' + getComputedStyle(k.querySelector('.account-tag')).backgroundColor + ' / faixa ' + getComputedStyle(k).borderLeftColor + '}' : ''))])))`)}`);
+          log.push(`abas com conta: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + ' -> ' + (t.dataset.account ? t.dataset.account + ' ' + getComputedStyle(t).borderBottomColor : 'sem conta')))`)}`);
           await shot(`t-quadro-${label}`);
           await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('Claude')).click()`);
           await sleep(300);
@@ -226,6 +243,13 @@ module.exports = function smoke(app, win, outDir) {
         for (let i = 0; i < 20 && !(await run(`!!document.querySelector(".worktrees .badge")`)); i += 1) await sleep(500);
         log.push(`sidebar: ${await run(`[...document.querySelectorAll('.worktrees li')].map((l) => l.textContent).join(' | ')`)}`);
         await readBoard('com-mudancas');
+        win.focus();
+        await sleep(300);
+        await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude')).click()`);
+        await sleep(500);
+        key('K', ['control']);
+        await sleep(400);
+        log.push(`Ctrl+K no terminal: foco no terminal=${await run('!!document.activeElement?.closest(".terminal")')} paleta aberta=${await run('!!document.querySelector(".palette")')}`);
         await run(`document.querySelector('.worktrees li [title^="Revisar"]').click()`);
         const diffStart = Date.now();
         for (let i = 0; i < 40 && !(await run('document.querySelectorAll(".frame:not([hidden]) .line-insert, .frame:not([hidden]) .char-insert").length')); i += 1) await sleep(500);

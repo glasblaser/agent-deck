@@ -104,6 +104,7 @@ function registerIpc() {
 
   handle('profiles:add', (input) => store.addProfile(input));
   handle('profiles:remove', (id) => store.removeProfile(id));
+  handle('profiles:setColor', (id, color) => store.setProfileColor(id, color));
   handle('profiles:usage', (id, force) => usage.forProfile(store.profile(id), force));
 
   handle('projects:add', async () => {

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('deck', {
   profiles: {
     add: invoke('profiles:add'),
     remove: invoke('profiles:remove'),
+    setColor: invoke('profiles:setColor'),
     usage: invoke('profiles:usage'),
   },
   projects: {
