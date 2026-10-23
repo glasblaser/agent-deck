@@ -1,5 +1,6 @@
 // Acompanha os agentes das abas: id da sessão (para reabrir depois) e status (trabalhando/ocioso).
-// Claude: o Claude Code mantém <conta>/sessions/<pid>.json com sessionId e status (busy/idle).
+// Claude: o Claude Code mantém <conta>/sessions/<pid>.json com sessionId e status: busy, idle ou
+// waiting (com waitingFor, ex.: "permission prompt") quando para esperando você responder.
 // Codex: não publica status; o id sai do arquivo de sessão (rollout) mais novo na mesma pasta.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -95,11 +96,12 @@ function codexMeta(file) {
   }
 }
 
-function update(ptyId, entry, sessionId, status) {
-  if (entry.sessionId === sessionId && entry.status === status) return;
+function update(ptyId, entry, sessionId, status, waitingFor = null) {
+  if (entry.sessionId === sessionId && entry.status === status && entry.waitingFor === waitingFor) return;
   entry.sessionId = sessionId;
   entry.status = status;
-  listener?.(ptyId, { sessionId, status });
+  entry.waitingFor = waitingFor;
+  listener?.(ptyId, { sessionId, status, waitingFor });
 }
 
 function poll() {
@@ -113,7 +115,8 @@ function poll() {
       const found = entry.pid ? list.find((s) => s.pid === entry.pid) : list.find((s) => s.sessionId === entry.sessionId);
       if (found) {
         entry.pid = found.pid;
-        update(ptyId, entry, found.sessionId || entry.sessionId, found.status || null);
+        update(ptyId, entry, found.sessionId || entry.sessionId, found.status || null,
+          found.status === 'waiting' ? String(found.waitingFor || 'resposta') : null);
       } else if (entry.pid) {
         // O registro sumiu: o agente saiu e a aba voltou para o shell.
         entry.pid = null;

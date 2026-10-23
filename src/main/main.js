@@ -1,6 +1,6 @@
 // Processo principal: janela, protocolo app:// e todos os handlers IPC.
 // O renderer roda em sandbox, sem Node; tudo que toca disco, rede ou processo passa por aqui.
-const { app, BrowserWindow, ipcMain, protocol, net, dialog, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, protocol, net, dialog, shell, screen, Notification } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -36,6 +36,8 @@ function serveApp(request) {
 }
 
 let win;
+// Notificações abertas: sem referência, o coletor de lixo some com elas antes do clique.
+const notes = new Set();
 // Ao fechar, os terminais morrem um a um e a UI tentaria salvar abas "encerradas"; a partir daqui, nada é salvo.
 let closing = false;
 
@@ -63,6 +65,7 @@ function createWindow() {
   win.loadURL('app://deck/renderer/index.html');
   ptys.attach(win.webContents);
   win.on('close', () => { closing = true; });
+  win.on('focus', () => win.flashFrame(false));
 }
 
 // O navegador embutido (<webview>) nunca recebe preload nem Node, e popups
@@ -144,6 +147,27 @@ function registerIpc() {
     const target = store.requireAllowedPath(dir);
     require('node:child_process').spawn('code', [`"${target}"`], { shell: true, detached: true, stdio: 'ignore' }).unref();
   });
+  // Agente pedindo atenção com o app em segundo plano: notificação do Windows e a barra de tarefas
+  // piscando até a janela ganhar foco. Clicar na notificação traz o app e abre a aba (tabId).
+  // Fica no main: no renderer (origem app://) a permissão de notificação vem negada.
+  ipcMain.on('window:notify', (_e, { title, body, tabId } = {}) => {
+    // Quem decide se o app está em segundo plano é o renderer (document.hasFocus); o isFocused daqui
+    // continua true com a janela minimizada.
+    if (!win || win.isDestroyed()) return;
+    if (!win.isFocused() || win.isMinimized()) win.flashFrame(true);
+    if (!Notification.isSupported()) return;
+    const note = new Notification({ title: String(title || 'Agent Deck').slice(0, 120), body: String(body || '').slice(0, 300) });
+    notes.add(note);
+    note.on('close', () => notes.delete(note));
+    note.on('click', () => {
+      notes.delete(note);
+      if (win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      win.focus();
+      if (Number.isInteger(tabId)) win.webContents.send('window:openTab', tabId);
+    });
+    note.show();
+  });
   handle('open:external', (url) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
   });
@@ -151,6 +175,9 @@ function registerIpc() {
 
 // Teste usa estado próprio, para não mexer no seu state.json.
 if (process.env.AGENT_DECK_SMOKE) app.setPath('userData', path.join(process.env.AGENT_DECK_SMOKE, 'userData'));
+
+// Sem isso as notificações do Windows saem como "electron.app.Electron".
+app.setAppUserModelId('Agent Deck');
 
 app.whenReady().then(() => {
   protocol.handle('app', serveApp);

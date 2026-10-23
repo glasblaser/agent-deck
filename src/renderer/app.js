@@ -251,13 +251,25 @@ function closeTab(tab) {
   activate(null);
 }
 
-const STATUS_LABEL = { busy: 'trabalhando…', attention: 'terminou' };
+// Estado do agente como você enxerga: esperando você (pediu permissão/resposta) vence tudo,
+// depois "terminou" (acabou numa aba que você não estava olhando), depois trabalhando.
+function agentState(tab) {
+  if (tab.status === 'waiting') return 'waiting';
+  if (tab.attention) return 'done';
+  if (tab.status === 'busy') return 'busy';
+  return tab.status === 'idle' ? 'idle' : null;
+}
+const STATE_LABEL = { busy: 'trabalhando…', waiting: 'esperando você', done: 'terminou' };
+const stateText = (tab) => {
+  const state = agentState(tab);
+  return state === 'waiting' && tab.waitingFor ? `esperando você: ${tab.waitingFor}` : STATE_LABEL[state] || '';
+};
 
 function renderTabs() {
   $('#tabs').replaceChildren(...tabs.map((tab) =>
     h('div', {
-      class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''} ${tab.attention ? 'attention' : ''}`,
-      title: [tab.tooltip || tab.title, STATUS_LABEL[tab.attention ? 'attention' : tab.status]].filter(Boolean).join(' · '),
+      class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''} ${tab.attention ? 'attention' : ''} ${tab.status === 'waiting' ? 'waiting' : ''}`,
+      title: [tab.tooltip || tab.title, stateText(tab)].filter(Boolean).join(' · '),
       'data-status': tab.status || null,
       'data-session': tab.sessionId || null,
       onclick: () => activate(tab),
@@ -270,8 +282,9 @@ function renderTabs() {
     tab.headLabel.textContent = tab.title;
     tab.headLabel.title = tab.tooltip || tab.title;
     tab.headDot.className = `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}`;
-    tab.headStatus.textContent = STATUS_LABEL[tab.attention ? 'attention' : tab.status] || '';
+    tab.headStatus.textContent = stateText(tab);
     tab.headStatus.classList.toggle('attention', !!tab.attention);
+    tab.headStatus.classList.toggle('waiting', tab.status === 'waiting');
     tab.frame.classList.toggle('exited', !!tab.exited);
   }
   for (const button of document.querySelectorAll('#layouts button')) {
@@ -481,13 +494,32 @@ function deliverBriefing(tab) {
   };
   tick();
 }
-// Status vindo do main: id de sessão (pode mudar com /clear ou /resume) e trabalhando/ocioso.
-// Agente que termina numa aba que você não está olhando ganha o aviso "terminou" até receber foco.
+// Notificação do Windows (e a barra de tarefas piscando) só quando o app está em segundo plano;
+// com ele na frente, o destaque na aba basta. Clicar na notificação traz o app e abre a aba.
+function notify(tab, title, body) {
+  if (!document.hasFocus()) deck.window.notify(title, body, tab.id);
+}
+deck.window.onOpenTab((tabId) => {
+  const tab = tabs.find((t) => t.id === tabId);
+  if (tab) activate(tab);
+});
+
+// Status vindo do main: id de sessão (pode mudar com /clear ou /resume), trabalhando/ocioso e
+// esperando você (permissão). Agente que termina numa aba que você não está olhando ganha o aviso
+// "terminou" até receber foco.
 deck.pty.onStatus((id, info) => {
   const tab = terminalsByPty.get(id)?.tab;
   if (!tab) return;
   const sessionChanged = info.sessionId && info.sessionId !== tab.sessionId;
-  if (tab.status === 'busy' && info.status === 'idle' && tab !== activeTab) tab.attention = true;
+  const unseen = tab !== activeTab || !document.hasFocus();
+  if (tab.status === 'busy' && info.status === 'idle') {
+    if (unseen) tab.attention = true;
+    notify(tab, `${tab.title} terminou`, 'O agente parou e está no prompt.');
+  }
+  if (info.status === 'waiting' && tab.status !== 'waiting') {
+    notify(tab, `${tab.title} está esperando você`, `Pediu: ${info.waitingFor || 'uma resposta'}.`);
+  }
+  tab.waitingFor = info.waitingFor || null;
   tab.status = info.status;
   if (info.sessionId) tab.sessionId = info.sessionId;
   if (tab.briefing && info.status === 'idle') deliverBriefing(tab);
@@ -1180,6 +1212,11 @@ for (const button of document.querySelectorAll('#layouts button')) {
 
 window.addEventListener('focus', () => {
   for (const project of state.projects) loadWorktrees(project).then(renderProjects);
+  // Voltou para o app: a aba que está na sua frente já foi vista.
+  if (activeTab?.attention) {
+    activeTab.attention = false;
+    renderTabs();
+  }
 });
 
 setInterval(() => refreshUsage(), 5 * 60 * 1000);

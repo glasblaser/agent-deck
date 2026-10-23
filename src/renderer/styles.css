@@ -209,3 +209,8 @@ dialog { width: 480px; }
 /* linha de worktree: o nome da tarefa é o que importa; os botões só aparecem no hover */
 .worktrees li .actions { display: none; }
 .worktrees li:hover .actions { display: flex; }
+
+/* esperando você (permissão): mais forte que "terminou", porque o agente está parado até você responder */
+.tab.waiting .label { color: var(--danger); font-weight: 600; }
+.tab.waiting .dot { box-shadow: 0 0 0 2px var(--danger); animation: pulse 1.1s ease-in-out infinite; }
+.frame-head .status.waiting { color: var(--danger); font-weight: 600; }

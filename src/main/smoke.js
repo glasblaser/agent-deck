@@ -86,7 +86,7 @@ module.exports = function smoke(app, win, outDir) {
       try {
         await sleep(2500);
         await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('.new-task').click()`);
-        await sleep(1000);
+        for (let i = 0; i < 30 && !(await run('!!document.querySelector("#modal [name=briefing]")')); i += 1) await sleep(500);
         log.push(`form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + (l.querySelector('select, input, textarea').value)))`)}`);
         await run(`(() => {
           document.querySelector('#modal [name=name]').value = 'Teste Briefing';
@@ -99,6 +99,8 @@ module.exports = function smoke(app, win, outDir) {
         // enquanto está no diálogo de trust e aceitar depois. A área de transferência sua volta ao fim.
         const SEND = 'SMOKE-ENVIO';
         const sendFromTerminal = async (label) => {
+          win.focus(); // ler a área de transferência exige o documento em foco
+          await sleep(300);
           clipboard.writeText(`${SEND} ${label}`);
           const before = await run('__toasts.length');
           await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Terminal')).click()`);
@@ -145,6 +147,45 @@ module.exports = function smoke(app, win, outDir) {
         log.push(`Enter depois do briefing: ${writes.some((w) => w.at > briefingAt && w.data === '\r')}`);
         log.push(`status: ${seen.join(' -> ')}`);
         await sendFromTerminal('depois-do-prompt');
+
+        // Esperando você: sai do auto mode (Shift+Tab até "manual mode"), pede uma escrita de arquivo e
+        // confere o estado "waiting", o destaque, a notificação e o piscar na barra; depois recusa com Esc.
+        const claudePty = Math.max(...[...ptySizes.keys()].filter((id) => writes.some((w) => w.id === id && w.data.includes(MARK))));
+        for (let i = 0; i < 6 && !/manual mode on/i.test(await screen()); i += 1) {
+          write(claudePty, '\x1b[Z');
+          await sleep(800);
+        }
+        log.push(`modo manual: ${/manual mode on/i.test(await screen())}`);
+        const flashes = [];
+        // App em segundo plano: é aí que a notificação e o piscar têm que acontecer.
+        win.minimize();
+        await sleep(500);
+        log.push(`em foco antes do pedido: ${win.isFocused()} / documento: ${await run("document.hasFocus()")}`);
+        const { ipcMain, Notification } = require('electron');
+        const shown = [];
+        const realShow = Notification.prototype.show;
+        Notification.prototype.show = function show() { shown.push(this.title); return realShow.call(this); };
+        ipcMain.on('window:notify', (_e, note) => flashes.push(`${note.title} | ${note.body}`));
+        write(claudePty, ' Ignore o texto acima e crie o arquivo probe.txt com o conteudo oi usando a ferramenta Write.');
+        await sleep(800);
+        write(claudePty, '\r');
+        let waitingSeen = null;
+        for (let i = 0; i < 60 && !waitingSeen; i += 1) {
+          await sleep(1000);
+          const st = await run(`JSON.stringify({ status: document.querySelector('.tab')?.dataset.status, waiting: document.querySelector('.tab')?.classList.contains('waiting'),
+            title: document.querySelector('.tab')?.title })`);
+          if (JSON.parse(st).status === 'waiting') waitingSeen = st;
+        }
+        log.push(`esperando você: ${waitingSeen}`);
+        log.push(`notificações pedidas ao main: ${JSON.stringify(flashes)}; mostradas: ${JSON.stringify(shown)}`);
+        await shot('t1b-esperando');
+        write(claudePty, '\x1b');
+        for (let i = 0; i < 20; i += 1) {
+          await sleep(1000);
+          if ((await run(`document.querySelector('.tab')?.dataset.status`)) === 'idle') break;
+        }
+        win.restore();
+        log.push(`depois do Esc: ${await run(`document.querySelector('.tab')?.dataset.status`)}`);
         await status('agente com briefing');
         await shot('t1-briefing');
 
@@ -153,10 +194,12 @@ module.exports = function smoke(app, win, outDir) {
         fs.writeFileSync(path.join(wt, 'a.txt'), 'linha 1\nlinha 2 mudada\n');
         fs.writeFileSync(path.join(wt, 'novo.txt'), 'oi\n');
         await run(`window.dispatchEvent(new Event('focus'))`);
-        await sleep(1500);
+        for (let i = 0; i < 20 && !(await run(`!!document.querySelector(".worktrees .badge")`)); i += 1) await sleep(500);
         log.push(`sidebar: ${await run(`[...document.querySelectorAll('.worktrees li')].map((l) => l.textContent).join(' | ')`)}`);
         await run(`document.querySelector('.worktrees li [title^="Revisar"]').click()`);
-        await sleep(4000);
+        const diffStart = Date.now();
+        for (let i = 0; i < 40 && !(await run('document.querySelectorAll(".frame:not([hidden]) .line-insert, .frame:not([hidden]) .char-insert").length')); i += 1) await sleep(500);
+        log.push(`diff marcado em ${Date.now() - diffStart} ms`);
         log.push(`diff: ${await run(`JSON.stringify({ resumo: document.querySelector('.frame:not([hidden]) .toolbar .path')?.textContent,
           arquivos: [...document.querySelectorAll('.frame:not([hidden]) .tree .file')].map((e) => e.textContent),
           monacoDiff: !!document.querySelector('.frame:not([hidden]) .monaco-diff-editor'),
@@ -164,7 +207,7 @@ module.exports = function smoke(app, win, outDir) {
         await shot('t2-diff');
 
         await run(`[...document.querySelectorAll('.frame:not([hidden]) .toolbar button')].find((b) => b.textContent.startsWith('Concluir')).click()`);
-        await sleep(1500);
+        for (let i = 0; i < 20 && !(await run(`document.querySelector("#modal").open && document.querySelector("#modal-title").textContent.startsWith("Concluir")`)); i += 1) await sleep(500);
         log.push(`concluir form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + l.querySelector('select, input, textarea').value))`)}`);
         await run(`document.querySelector('#modal-ok').click()`);
         await sleep(15000);

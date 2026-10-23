@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld('deck', {
     read: invoke('fs:read'),
     write: invoke('fs:write'),
   },
+  window: {
+    notify: (title, body, tabId) => ipcRenderer.send('window:notify', { title, body, tabId }),
+    onOpenTab: (fn) => ipcRenderer.on('window:openTab', (_e, tabId) => fn(tabId)),
+  },
   open: {
     vscode: invoke('open:vscode'),
     external: invoke('open:external'),
