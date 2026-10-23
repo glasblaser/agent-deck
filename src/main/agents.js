@@ -96,12 +96,103 @@ function codexMeta(file) {
   }
 }
 
+// Arquivo da conversa: <conta>/projects/<pasta>/<id>.jsonl (a pasta é o cwd com outra grafia; procura pelo id).
+function claudeTranscript(dir, sessionId) {
+  const projects = path.join(dir, 'projects');
+  try {
+    for (const folder of fs.readdirSync(projects)) {
+      const file = path.join(projects, folder, `${sessionId}.jsonl`);
+      if (fs.existsSync(file)) return file;
+    }
+  } catch {}
+  return null;
+}
+
+// Resumo de uma chamada de ferramenta: o argumento que diz o que ela vai fazer. Caminho dentro da
+// pasta do agente vira relativo, senão o caminho inteiro engole o card.
+function toolSummary(block, cwd) {
+  const input = block.input || {};
+  const detail = input.command || input.file_path || input.notebook_path || input.path || input.url
+    || input.pattern || input.query || input.description || Object.values(input).find((v) => typeof v === 'string') || '';
+  let shown = detail;
+  if (cwd && typeof detail === 'string' && path.isAbsolute(detail)) {
+    const rel = path.relative(cwd, detail);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) shown = rel;
+  }
+  return `${block.name}${shown ? `: ${shown}` : ''}`;
+}
+
+const MAX_TAIL = 4 * 1024 * 1024;
+const CHUNK = 256 * 1024;
+
+// Última coisa que o Claude disse (texto) ou pediu (ferramenta), do fim da conversa em disco.
+// O arquivo tem linhas enormes no meio (a requisição inteira), então lê de trás pra frente em
+// blocos, só até achar uma resposta do agente principal (não de subagente), e no máximo 4 MB.
+function claudeLastMessage(file, cwd) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    let pos = fs.fstatSync(fd).size;
+    let carry = Buffer.alloc(0);
+    while (pos > 0 && carry.length < MAX_TAIL) {
+      const size = Math.min(CHUNK, pos);
+      pos -= size;
+      const buf = Buffer.alloc(size);
+      fs.readSync(fd, buf, 0, size, pos);
+      const data = Buffer.concat([buf, carry]);
+      const lines = data.toString('utf8').split('\n');
+      // A primeira linha pode estar cortada: volta para o próximo bloco, a não ser no começo do arquivo.
+      carry = pos > 0 ? Buffer.from(lines.shift(), 'utf8') : Buffer.alloc(0);
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i];
+        if (!line.includes('"type":"assistant"')) continue;
+        let entry;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (entry.type !== 'assistant' || entry.isSidechain || !Array.isArray(entry.message?.content)) continue;
+        for (const block of [...entry.message.content].reverse()) {
+          if (block.type === 'text' && block.text?.trim()) return { kind: 'text', text: block.text.trim().replace(/\s+/g, ' ').slice(0, 400) };
+          if (block.type === 'tool_use') return { kind: 'tool', text: toolSummary(block, cwd).replace(/\s+/g, ' ').slice(0, 300) };
+        }
+      }
+    }
+  } catch {
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  return null;
+}
+
+// Relê a última fala quando o agente para (parou ou pediu algo) e enquanto a conversa no disco
+// continuar mudando: a resposta pode chegar ao arquivo um instante depois do status.
+function refreshLastMessage(entry) {
+  if (!entry.sessionId || !['idle', 'waiting'].includes(entry.status)) return;
+  entry.transcript ??= claudeTranscript(entry.dir, entry.sessionId);
+  if (!entry.transcript) return;
+  let mtime;
+  try {
+    mtime = fs.statSync(entry.transcript).mtimeMs;
+  } catch {
+    entry.transcript = null;
+    return;
+  }
+  if (mtime === entry.transcriptMtime) return;
+  entry.transcriptMtime = mtime;
+  entry.lastMessage = claudeLastMessage(entry.transcript, entry.cwd);
+}
+
 function update(ptyId, entry, sessionId, status, waitingFor = null) {
-  if (entry.sessionId === sessionId && entry.status === status && entry.waitingFor === waitingFor) return;
+  if (entry.sessionId !== sessionId) entry.transcript = null;
+  const before = JSON.stringify([entry.sessionId, entry.status, entry.waitingFor, entry.lastMessage]);
   entry.sessionId = sessionId;
   entry.status = status;
   entry.waitingFor = waitingFor;
-  listener?.(ptyId, { sessionId, status, waitingFor });
+  if (entry.kind === 'claude') refreshLastMessage(entry);
+  if (before === JSON.stringify([sessionId, status, waitingFor, entry.lastMessage])) return;
+  listener?.(ptyId, { sessionId, status, waitingFor, lastMessage: entry.lastMessage || null });
 }
 
 function poll() {

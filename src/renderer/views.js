@@ -13,6 +13,16 @@ export const COLUMNS = [
 
 export const STATE_TEXT = { waiting: 'esperando você', busy: 'trabalhando', done: 'terminou', idle: 'no prompt' };
 
+// "agora", "há 4 min", "há 2 h", "há 3 d".
+export function ago(ms) {
+  if (!ms) return '';
+  const minutes = Math.floor((Date.now() - ms) / 60000);
+  if (minutes < 1) return 'agora';
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `há ${hours} h` : `há ${Math.floor(hours / 24)} d`;
+}
+
 // Agente que mais merece sua atenção numa tarefa: o que espera você, depois o que terminou sem ser visto.
 export function mainAgent(task) {
   const rank = { waiting: 0, done: 1, busy: 2, idle: 3 };
@@ -21,6 +31,7 @@ export function mainAgent(task) {
 
 function card(task, actions, h) {
   const agent = mainAgent(task);
+  const said = agent?.lastMessage;
   return h('article', {
     class: `card col-${task.column} ${task.agents.some((a) => a.state === 'done') ? 'done' : ''}`,
     title: [task.wt?.path || task.project.path, task.briefing].filter(Boolean).join('\n\n'),
@@ -36,11 +47,15 @@ function card(task, actions, h) {
       onclick: (e) => { e.stopPropagation(); actions.focus(a.tab); },
     }, h('span', { class: `dot ${a.tab.kindClass} ${a.state === 'busy' || a.state === 'waiting' ? 'busy' : ''}` }),
     h('span', { class: 'who' }, a.tab.agentLabel || a.tab.title),
-    h('span', { class: 'state' }, STATE_TEXT[a.state] || 'parado'))))
+    h('span', { class: 'state', title: a.since ? new Date(a.since).toLocaleString('pt-BR') : '' },
+      [STATE_TEXT[a.state] || 'parado', ago(a.since)].filter(Boolean).join(' · ')))))
     : h('p', { class: 'muted small' }, 'Nenhum agente aberto.'),
+  said ? h('blockquote', { class: `said ${said.kind}`, title: said.text },
+    said.kind === 'tool' ? (agent.state === 'waiting' ? 'Pediu: ' : 'Última ação: ') : '', said.text) : null,
   h('footer', {},
     task.ahead ? h('span', { class: 'badge', title: 'commits à frente da base' }, `↑${task.ahead}`) : null,
     task.dirty ? h('span', { class: 'badge dirty', title: 'arquivos sem commit' }, `●${task.dirty}`) : null,
+    !task.agents.length && task.lastCommitAt ? h('span', { class: 'muted small' }, `commit ${ago(task.lastCommitAt)}`) : null,
     h('span', { class: 'spacer' }),
     task.agents.length ? null : h('button', { title: 'Abrir Claude nessa tarefa', onclick: (e) => { e.stopPropagation(); actions.openAgent(task); } }, 'Abrir Claude'),
     task.wt ? h('button', { title: 'Revisar o que mudou', onclick: (e) => { e.stopPropagation(); actions.diff(task); } }, '± Diff') : null,

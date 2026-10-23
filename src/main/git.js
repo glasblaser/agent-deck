@@ -83,7 +83,8 @@ async function taskInfo(projectPath, wt) {
     quiet(wt.path, ['status', '--porcelain']),
   ]);
   const ahead = base ? Number(await quiet(projectPath, ['rev-list', '--count', `${base}..${wt.branch}`, '--'])) || 0 : 0;
-  return { ...wt, base, description, ahead, dirty: status ? status.split(/\r?\n/).length : 0 };
+  const lastCommitAt = Number(await quiet(projectPath, ['log', '-1', '--format=%ct', wt.branch, '--'])) * 1000 || null;
+  return { ...wt, base, description, ahead, lastCommitAt, dirty: status ? status.split(/\r?\n/).length : 0 };
 }
 
 async function listWorktrees(projectPath) {

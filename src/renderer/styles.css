@@ -248,3 +248,9 @@ dialog { width: 480px; }
 .card .agent.st-busy .state { color: var(--accent); }
 .card footer { display: flex; align-items: center; gap: 5px; }
 .card footer button { font-size: 11px; padding: 0 6px; }
+
+/* última fala do agente no card */
+.card .said { margin: 0; padding: 4px 8px; border-left: 2px solid var(--line); color: var(--text); font-size: 12px; opacity: .85;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.card .said.tool { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; }
+.card.col-waiting .said { border-left-color: var(--danger); }

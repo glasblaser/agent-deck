@@ -85,6 +85,7 @@ module.exports = function smoke(app, win, outDir) {
     win.webContents.once('did-finish-load', async () => {
       try {
         await sleep(2500);
+        log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)')))`)}`);
         await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('.new-task').click()`);
         for (let i = 0; i < 30 && !(await run('!!document.querySelector("#modal [name=briefing]")')); i += 1) await sleep(500);
         log.push(`form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + (l.querySelector('select, input, textarea').value)))`)}`);
@@ -119,7 +120,8 @@ module.exports = function smoke(app, win, outDir) {
           log.push(`quadro ${label}: ${await run(`JSON.stringify(Object.fromEntries([...document.querySelectorAll('.view-board .column')].map((c) =>
             [c.querySelector('h3').firstChild.textContent, [...c.querySelectorAll('.card')].map((k) => k.querySelector('header strong').textContent
               + ' [' + [...k.querySelectorAll('.agent .state')].map((e) => e.textContent).join(',') + ']'
-              + [...k.querySelectorAll('.badge')].map((b) => ' ' + b.textContent).join(''))])))`)}`);
+              + [...k.querySelectorAll('.badge')].map((b) => ' ' + b.textContent).join('')
+              + (k.querySelector('.said') ? ' «' + k.querySelector('.said').textContent.slice(0, 80) + '»' : ''))])))`)}`);
           await shot(`t-quadro-${label}`);
           await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('Claude')).click()`);
           await sleep(300);
@@ -151,7 +153,7 @@ module.exports = function smoke(app, win, outDir) {
         const seen = [];
         for (let i = 0; i < 90; i += 1) {
           await sleep(1000);
-          const st = await run(`document.querySelector('.tab')?.dataset.status || '-'`);
+          const st = await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status || '-'`);
           if (seen.at(-1) !== st) seen.push(st);
           if (seen.includes('busy') && st === 'idle') break;
         }
@@ -163,8 +165,10 @@ module.exports = function smoke(app, win, outDir) {
         // confere o estado "waiting", o destaque, a notificação e o piscar na barra; depois recusa com Esc.
         const claudePty = Math.max(...[...ptySizes.keys()].filter((id) => writes.some((w) => w.id === id && w.data.includes(MARK))));
         for (let i = 0; i < 6 && !/manual mode on/i.test(await screen()); i += 1) {
+          // Uma tecla por vez e confirma com folga: com a tela atrasada, a próxima tecla passaria de
+          // "manual" para "accept edits", que aprova escrita sozinho e o teste não veria a permissão.
           write(claudePty, '\x1b[Z');
-          await sleep(800);
+          await sleep(1500);
         }
         log.push(`modo manual: ${/manual mode on/i.test(await screen())}`);
         const flashes = [];
@@ -183,8 +187,8 @@ module.exports = function smoke(app, win, outDir) {
         let waitingSeen = null;
         for (let i = 0; i < 60 && !waitingSeen; i += 1) {
           await sleep(1000);
-          const st = await run(`JSON.stringify({ status: document.querySelector('.tab')?.dataset.status, waiting: document.querySelector('.tab')?.classList.contains('waiting'),
-            title: document.querySelector('.tab')?.title })`);
+          const st = await run(`JSON.stringify({ status: [...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status, waiting: [...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.classList.contains('waiting'),
+            title: [...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.title })`);
           if (JSON.parse(st).status === 'waiting') waitingSeen = st;
         }
         log.push(`esperando você: ${waitingSeen}`);
@@ -194,10 +198,10 @@ module.exports = function smoke(app, win, outDir) {
         write(claudePty, '\x1b');
         for (let i = 0; i < 20; i += 1) {
           await sleep(1000);
-          if ((await run(`document.querySelector('.tab')?.dataset.status`)) === 'idle') break;
+          if ((await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status`)) === 'idle') break;
         }
         win.restore();
-        log.push(`depois do Esc: ${await run(`document.querySelector('.tab')?.dataset.status`)}`);
+        log.push(`depois do Esc: ${await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status`)}`);
         await status('agente com briefing');
         await shot('t1-briefing');
 

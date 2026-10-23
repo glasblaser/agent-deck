@@ -122,10 +122,12 @@ function addTab(tab, slot) {
       tab.headDot,
       tab.headLabel,
       tab.headStatus,
-      h('button', { class: 'close', title: 'Fechar', onclick: () => closeTab(tab) }, '×')),
+      tab.pinned ? null : h('button', { class: 'close', title: 'Fechar', onclick: () => closeTab(tab) }, '×')),
     tab.pane);
   $('#panes').append(tab.frame);
-  tabs.push(tab);
+  // Aba fixa (o quadro) fica sempre em primeiro.
+  if (tab.pinned) tabs.unshift(tab);
+  else tabs.push(tab);
   if (slot !== undefined) {
     if (slot >= 0 && slot < layout) slots[slot] = tab;
     layoutPanes();
@@ -235,12 +237,16 @@ async function restoreSession() {
     focusedSlot = Number.isInteger(saved.focusedSlot) && saved.focusedSlot < layout ? saved.focusedSlot : 0;
     activate(null);
   } finally {
+    // O quadro é a tela inicial: sem sessão anterior ele aparece; com sessão, entra como primeira aba
+    // sem tirar do painel o que você deixou aberto.
+    if (!tabs.some((t) => t.viewKind === 'board')) openBoard(tabs.length ? -1 : undefined);
     restoring = false;
     saveSession();
   }
 }
 
 function closeTab(tab) {
+  if (tab.pinned) return;
   if (tab.isDirty?.() && !confirm(`"${tab.title}" tem alterações não salvas. Fechar mesmo assim?`)) return;
   tab.dispose?.();
   tab.frame.remove();
@@ -279,7 +285,7 @@ function renderTabs() {
     },
     h('span', { class: `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}` }),
     h('span', { class: 'label' }, tab.title),
-    h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
+    tab.pinned ? null : h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
   for (const tab of tabs) {
     tab.headLabel.textContent = tab.title;
     tab.headLabel.title = tab.tooltip || tab.title;
@@ -525,7 +531,9 @@ deck.pty.onStatus((id, info) => {
   }
   const previous = tab.status;
   tab.waitingFor = info.waitingFor || null;
+  tab.lastMessage = info.lastMessage || null;
   tab.status = info.status;
+  if (previous !== info.status) tab.statusSince = Date.now();
   if (info.sessionId) tab.sessionId = info.sessionId;
   if (tab.briefing && info.status === 'idle') deliverBriefing(tab);
   // Parou (terminou ou pediu algo): é quando commits e arquivos mudam; atualiza os contadores da tarefa.
@@ -885,7 +893,8 @@ function renderProjects() {
 // derivada do estado real. Agentes rodando direto na pasta do projeto viram a "tarefa" raiz dele.
 function taskModel() {
   const list = [];
-  const agentsIn = (match) => tabs.filter((t) => t.isAgent && t.cwd && match(t.cwd)).map((tab) => ({ tab, state: agentState(tab) }));
+  const agentsIn = (match) => tabs.filter((t) => t.isAgent && t.cwd && match(t.cwd))
+    .map((tab) => ({ tab, state: agentState(tab), since: tab.statusSince || null, lastMessage: tab.lastMessage || null }));
   const columnOf = (agents, changed) => {
     const states = agents.map((a) => a.state);
     if (states.includes('waiting')) return 'waiting';
@@ -904,7 +913,7 @@ function taskModel() {
       list.push({
         id: wt.path, name: (wt.branch || basename(wt.path)).replace(/^task\//, ''), project, wt,
         briefing: wt.description || '', agents, column: columnOf(agents, wt.ahead || wt.dirty),
-        ahead: wt.ahead || 0, dirty: wt.dirty || 0, managed: !!wt.managed,
+        ahead: wt.ahead || 0, dirty: wt.dirty || 0, managed: !!wt.managed, lastCommitAt: wt.lastCommitAt || null,
       });
     }
   }
@@ -933,7 +942,7 @@ function refreshViews() {
 }
 
 // Uma aba de visão por tipo: abrir de novo só traz a que já existe.
-function openView(kind, title, draw, slot) {
+function openView(kind, title, draw, slot, { pinned = false } = {}) {
   const existing = tabs.find((t) => t.viewKind === kind);
   if (existing) return activate(existing);
   const pane = h('div', { class: `view view-${kind}` });
@@ -943,6 +952,7 @@ function openView(kind, title, draw, slot) {
     title,
     kindClass: 'view',
     viewKind: kind,
+    pinned,
     persist: () => ({ type: kind }),
     onShow: () => render(taskModel()),
     dispose: () => liveViews.delete(render),
@@ -953,7 +963,7 @@ function openView(kind, title, draw, slot) {
 }
 
 function openBoard(slot) {
-  return openView('board', 'Quadro', (pane, tasks) => renderBoard(pane, tasks, taskActions, h), slot);
+  return openView('board', 'Quadro', (pane, tasks) => renderBoard(pane, tasks, taskActions, h), slot, { pinned: true });
 }
 
 // Nova tarefa sem estar num projeto: com um repositório só, vai direto; com vários, pergunta qual.
@@ -1325,6 +1335,7 @@ window.addEventListener('focus', () => {
 
 setInterval(() => refreshUsage(), 5 * 60 * 1000);
 setInterval(renderAccounts, 60 * 1000);
+setInterval(refreshViews, 30 * 1000);
 
 // Primeiro o estado (contas, projetos), depois as abas da última sessão: elas dependem dos dois.
 refreshState().then(restoreSession);
