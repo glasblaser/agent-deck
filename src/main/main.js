@@ -114,6 +114,13 @@ function registerIpc() {
     return store.addProject(result.filePaths[0]);
   });
   handle('projects:remove', (id) => store.removeProject(id));
+  handle('projects:addWorkspace', async () => {
+    const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Pasta-raiz: cada subpasta vira um projeto' });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return store.addWorkspace(result.filePaths[0]);
+  });
+  handle('projects:removeWorkspace', (dir) => store.removeWorkspace(dir));
+  handle('projects:setPinned', (id, pinned) => store.setProjectPinned(id, !!pinned));
 
   handle('git:worktrees', (projectPath) => git.listWorktrees(store.requireProjectPath(projectPath)));
   handle('git:branches', (projectPath) => git.branches(store.requireProjectPath(projectPath)));

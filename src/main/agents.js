@@ -1,7 +1,8 @@
 // Acompanha os agentes das abas: id da sessão (para reabrir depois) e status (trabalhando/ocioso).
 // Claude: o Claude Code mantém <conta>/sessions/<pid>.json com sessionId e status: busy, idle ou
 // waiting (com waitingFor, ex.: "permission prompt") quando para esperando você responder.
-// Codex: não publica status; o id sai do arquivo de sessão (rollout) mais novo na mesma pasta.
+// Codex: não publica status; o id sai do arquivo de sessão (rollout) mais novo na mesma pasta, e o
+// status do próprio rollout: task_started abre um turno, task_complete fecha.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -96,6 +97,106 @@ function codexMeta(file) {
   }
 }
 
+// Rollout de uma conversa do Codex retomada (o id veio de fora): procura o arquivo pelo id nos últimos 30 dias.
+function codexRolloutById(dir, id) {
+  for (let daysAgo = 0; daysAgo < 30; daysAgo += 1) {
+    const d = new Date(Date.now() - daysAgo * 86400000);
+    const folder = path.join(dir, 'sessions', String(d.getFullYear()),
+      String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+    try {
+      const name = fs.readdirSync(folder).find((n) => n.endsWith(`${id}.jsonl`));
+      if (name) return path.join(folder, name);
+    } catch {}
+  }
+  return null;
+}
+
+// Turno sem task_complete e sem nada escrito há tanto tempo: foi interrompido (Esc não deixa marca no arquivo).
+// O tempo vem do timestamp da última linha: o Windows não atualiza a data de um arquivo que segue aberto.
+const CODEX_STALE_MS = 5 * 60 * 1000;
+
+// Última fala do Codex numa linha do rollout: mensagem do assistente ou chamada de ferramenta.
+function codexSaid(entry) {
+  const p = entry.payload || {};
+  if (entry.type === 'event_msg' && p.type === 'agent_message' && p.message?.trim()) return { kind: 'text', text: p.message };
+  if (entry.type !== 'response_item') return null;
+  if (p.type === 'message' && p.role === 'assistant') {
+    const text = (p.content || []).filter((c) => c.type === 'output_text').map((c) => c.text).join(' ').trim();
+    return text ? { kind: 'text', text } : null;
+  }
+  if (p.type === 'function_call' || p.type === 'custom_tool_call') {
+    let detail = p.input ?? p.arguments ?? '';
+    try {
+      const args = JSON.parse(detail);
+      detail = args.command ? [].concat(args.command).join(' ') : args.path || args.file_path || detail;
+    } catch {}
+    return { kind: 'tool', text: `${p.name}${detail ? `: ${String(detail).split('\n')[0]}` : ''}` };
+  }
+  return null;
+}
+
+// Status e última fala, do fim do rollout: o último task_started/task_complete diz se está trabalhando.
+function codexState(file) {
+  let fd;
+  let status = null;
+  let lastMessage = null;
+  let lastAt = 0;
+  try {
+    fd = fs.openSync(file, 'r');
+    const { size } = fs.fstatSync(fd);
+    let pos = size;
+    let carry = Buffer.alloc(0);
+    while (pos > 0 && size - pos < MAX_TAIL && (!status || !lastMessage)) {
+      const length = Math.min(CHUNK, pos);
+      pos -= length;
+      const buf = Buffer.alloc(length);
+      fs.readSync(fd, buf, 0, length, pos);
+      const lines = Buffer.concat([buf, carry]).toString('utf8').split('\n');
+      carry = pos > 0 ? Buffer.from(lines.shift(), 'utf8') : Buffer.alloc(0);
+      for (let i = lines.length - 1; i >= 0 && (!status || !lastMessage); i -= 1) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        if (!lastAt) lastAt = Date.parse(/"timestamp":"([^"]+)"/.exec(line.slice(0, 200))?.[1] || '') || 0;
+        if (!/"type":"(event_msg|response_item)"/.test(line.slice(0, 200))) continue;
+        let entry;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const type = entry.payload?.type;
+        if (!status && type === 'task_started') status = Date.now() - lastAt > CODEX_STALE_MS ? 'idle' : 'busy';
+        if (!status && type === 'task_complete') status = 'idle';
+        const said = !lastMessage && codexSaid(entry);
+        if (said) lastMessage = { kind: said.kind, text: said.text.trim().replace(/\s+/g, ' ').slice(0, said.kind === 'tool' ? 300 : 400) };
+      }
+    }
+  } catch {
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  return { status: status || 'idle', lastMessage, lastAt };
+}
+
+// Relê o rollout quando ele cresce, e de tempos em tempos enquanto "trabalhando" (para notar turno interrompido).
+function pollCodex(ptyId, entry) {
+  entry.rollout ??= codexRolloutById(entry.dir, entry.sessionId);
+  if (!entry.rollout) return;
+  let size;
+  try {
+    size = fs.statSync(entry.rollout).size;
+  } catch {
+    entry.rollout = null;
+    return;
+  }
+  const stale = entry.status === 'busy' && Date.now() - (entry.rolloutAt || 0) > CODEX_STALE_MS;
+  if (size === entry.rolloutSize && !stale) return;
+  entry.rolloutSize = size;
+  const { status, lastMessage, lastAt } = codexState(entry.rollout);
+  entry.rolloutAt = lastAt;
+  update(ptyId, entry, entry.sessionId, status, null, lastMessage);
+}
+
 // Arquivo da conversa: <conta>/projects/<pasta>/<id>.jsonl (a pasta é o cwd com outra grafia; procura pelo id).
 function claudeTranscript(dir, sessionId) {
   const projects = path.join(dir, 'projects');
@@ -184,9 +285,11 @@ function refreshLastMessage(entry) {
   entry.lastMessage = claudeLastMessage(entry.transcript, entry.cwd);
 }
 
-function update(ptyId, entry, sessionId, status, waitingFor = null) {
+// message: última fala já lida (Codex); o Claude relê a dele aqui.
+function update(ptyId, entry, sessionId, status, waitingFor = null, message = undefined) {
   if (entry.sessionId !== sessionId) entry.transcript = null;
   const before = JSON.stringify([entry.sessionId, entry.status, entry.waitingFor, entry.lastMessage]);
+  if (message !== undefined) entry.lastMessage = message;
   entry.sessionId = sessionId;
   entry.status = status;
   entry.waitingFor = waitingFor;
@@ -218,11 +321,13 @@ function poll() {
         const meta = codexMeta(file);
         if (meta && !claimed.has(meta.id) && samePath(meta.cwd, entry.cwd)) {
           claimed.add(meta.id);
+          entry.rollout = file;
           update(ptyId, entry, meta.id, null);
           break;
         }
       }
     }
+    if (entry.kind === 'codex' && entry.sessionId) pollCodex(ptyId, entry);
   }
 }
 

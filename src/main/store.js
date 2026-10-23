@@ -47,6 +47,77 @@ function load(userData) {
     if (!item.projectPath) item.projectPath = state.projects.find((p) => p.id === item.projectId)?.path;
   }
   applyRecovery(path.join(userData, 'recovery.json'));
+  // Primeira vez com pastas-raiz: a pasta onde já moram dois ou mais projetos cadastrados vira raiz.
+  if (!state.workspaces) {
+    const parents = state.projects.map((p) => path.dirname(p.path));
+    state.workspaces = [...new Set(parents)].filter((dir) => parents.filter((p) => p === dir).length >= 2);
+    save();
+  }
+  discover();
+}
+
+// ---------- pastas-raiz: toda subpasta delas é projeto, sem cadastro ----------
+
+// Fora da descoberta: pastas de apoio (_referencia-rm, .git) e as irmãs onde ficam as worktrees.
+const NOT_PROJECT = /^[._]|\.worktrees$/i;
+
+const inWorkspace = (dir) => (state.workspaces || []).some((root) => path.dirname(dir).toLowerCase() === root.toLowerCase());
+
+// Sincroniza a lista com o disco: subpasta nova entra, pasta descoberta que sumiu sai.
+// Cadastradas à mão (fora das raízes) ficam como estão.
+function discover() {
+  let changed = false;
+  for (const root of state.workspaces || []) {
+    let entries;
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || NOT_PROJECT.test(entry.name)) continue;
+      const dir = path.join(root, entry.name);
+      if (state.projects.some((p) => p.path.toLowerCase() === dir.toLowerCase())) continue;
+      state.projects.push({ id: crypto.randomUUID(), name: entry.name, path: dir });
+      changed = true;
+    }
+  }
+  const kept = state.projects.filter((p) => !inWorkspace(p.path) || fs.existsSync(p.path));
+  if (kept.length !== state.projects.length) {
+    state.projects = kept;
+    changed = true;
+  }
+  state.projects.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
+  if (changed) save();
+}
+
+function addWorkspace(dir) {
+  const resolved = path.resolve(dir);
+  if (!(state.workspaces || []).some((w) => w.toLowerCase() === resolved.toLowerCase())) {
+    state.workspaces = [...(state.workspaces || []), resolved];
+    save();
+  }
+  discover();
+  return publicState();
+}
+
+// Parar de ler uma raiz: os projetos dela saem da lista, menos os que têm card na fila.
+function removeWorkspace(dir) {
+  const target = String(dir).toLowerCase();
+  const queued = new Set((state.backlog || []).map((b) => b.projectId));
+  state.projects = state.projects.filter((p) => path.dirname(p.path).toLowerCase() !== target || queued.has(p.id));
+  state.workspaces = (state.workspaces || []).filter((w) => w.toLowerCase() !== target);
+  save();
+  return publicState();
+}
+
+// Fixado = sempre em "Em uso" na barra lateral, mesmo sem nada aberto.
+function setProjectPinned(projectId, pinned) {
+  const project = requireProject(projectId);
+  if (pinned) project.pinned = true;
+  else delete project.pinned;
+  save();
+  return publicState();
 }
 
 // Recuperação preparada com o app fechado (o app em uso sobrescreveria o state.json): recadastra pastas,
@@ -77,7 +148,11 @@ function applyRecovery(recoveryFile) {
 }
 
 function publicState() {
-  return { profiles: state.profiles, projects: state.projects, home: HOME, backlog: state.backlog || [], done: state.done || [] };
+  discover();
+  return {
+    profiles: state.profiles, home: HOME, backlog: state.backlog || [], done: state.done || [], workspaces: state.workspaces || [],
+    projects: state.projects.map((p) => ({ ...p, inWorkspace: inWorkspace(p.path) })),
+  };
 }
 
 // ---------- quadro: "A fazer" (tarefas ainda sem worktree) e "Concluídas" (histórico) ----------
@@ -170,7 +245,9 @@ function removeProfile(id) {
   save();
 }
 
+// Pasta escolhida à mão. Se ela mora numa raiz, já está na lista (a descoberta pôs lá).
 function addProject(dir) {
+  discover();
   const existing = state.projects.find((p) => p.path.toLowerCase() === dir.toLowerCase());
   if (existing) return existing;
   const created = { id: crypto.randomUUID(), name: path.basename(dir), path: dir };
@@ -224,7 +301,9 @@ function setupCopyFor(projectPath) {
   return state.projects.find((p) => canonical(p.path) === canonical(projectPath))?.setup?.copy || [];
 }
 
+// Só projeto cadastrado à mão: o de uma pasta-raiz voltaria na próxima leitura.
 function removeProject(id) {
+  if (inWorkspace(requireProject(id).path)) throw new Error('Esse projeto vem da pasta-raiz: ele só sai da barra se a pasta sair de lá.');
   state.projects = state.projects.filter((p) => p.id !== id);
   save();
 }
@@ -280,7 +359,8 @@ function requireCwd(target) {
 }
 
 module.exports = {
-  load, publicState, profile, addProfile, removeProfile, setProfileColor, addProject, setProjectSetup, setupCommandFor, setupCopyFor, removeProject, getSession, saveSession,
+  load, publicState, profile, addProfile, removeProfile, setProfileColor, addProject, setProjectSetup, setupCommandFor, setupCopyFor, removeProject, getSession,
+  addWorkspace, removeWorkspace, setProjectPinned, saveSession,
   addBacklog, updateBacklog, removeBacklog, recordDone, removeDone,
   requireProjectPath, requireAllowedPath, requireCwd, slug, HOME,
 };

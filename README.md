@@ -87,13 +87,18 @@ they come from the real state of the agents and of git, so the board can't drift
 Each card shows the briefing, each agent with its state and for how long ("working · 4 min ago"), and the
 agent's **last message**, read from the end of the conversation on disk: text, or the tool it is asking
 for while waiting ("Asked: Write: src/a.js"). Agents running in the project folder itself show up as the
-project's "(root)" task. Codex doesn't publish status or a readable last message.
+project's "(root)" task. For Codex, state and last message come from its rollout file (`task_started` /
+`task_complete`); it has no "waiting for you", and a turn interrupted with Esc reads as idle after 5 minutes.
 
 ### Day to day
 
 - **Panes**: 1, 2 side by side, or 4 (2×2) — buttons at the corner of the tab bar or Ctrl+Shift+1/2/4.
   Clicking an off-screen tab puts it in the focused pane (yellow border).
 - **Sidebar**: drag the edge to resize; Ctrl+Shift+B hides it.
+- **Projects**: no registering or removing. With "+ → Root folder", every subfolder becomes a project, including
+  ones created later (except `_name`, `.name` and `*.worktrees`); "One folder" adds a loose one. The bar shows
+  "In use" (open tab, task, queued card, conversation from the last 3 days, or pinned with ☆) and folds the rest
+  into "Others", with a filter at the top. On first start, a folder holding two or more registered projects becomes a root.
 - **Command palette**: Ctrl+Shift+P anywhere, or Ctrl+K outside the terminal and editor (in the agent's prompt
   Ctrl+K deletes to end of line). Fuzzy search over tabs, tasks (plus diff/finish), the to-do queue, per-project actions and layout.
 - **Account colors**: each account has a color (automatic, or pick it on the account card). It shows as the stripe
@@ -102,7 +107,7 @@ project's "(root)" task. Codex doesn't publish status or a readable last message
   stays highlighted ("done") until it gets focus. When Claude asks for permission the tab turns red
   ("waiting for you": the session file says `status: "waiting"`). With the app in the background, both
   raise a Windows notification and flash the taskbar; clicking the notification opens the tab.
-  Codex doesn't publish status.
+  Codex shows working/done too (read from its rollout), but never "waiting for you".
 - **Reopen**: on start, the app recreates the tabs from last time. Claude comes back with `claude --resume <id>`
   (each tab in its own conversation; the app opens each one with its own `--session-id`). With no message
   sent there's no conversation on disk, so a new one opens. Codex comes back with `codex resume <id>` when the id

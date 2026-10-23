@@ -136,6 +136,7 @@ function addTab(tab, slot) {
   // Aba fixa (o quadro) fica sempre em primeiro.
   if (tab.pinned) tabs.unshift(tab);
   else tabs.push(tab);
+  queueProjects();
   if (slot !== undefined) {
     if (slot >= 0 && slot < layout) slots[slot] = tab;
     layoutPanes();
@@ -265,6 +266,7 @@ function closeTab(tab, { quiet = false } = {}) {
   tab.dispose?.();
   tab.frame.remove();
   tabs.splice(tabs.indexOf(tab), 1);
+  queueProjects();
   const index = slots.indexOf(tab);
   if (index !== -1) {
     // O painel que ficou vago recebe a aba mais recente que não está na tela.
@@ -881,41 +883,117 @@ function agentButtons(cwd) {
     h('button', { title: 'Editor aqui', onclick: (e) => { e.stopPropagation(); openEditor(cwd); } }, '✎'));
 }
 
+// Projeto "em uso": fixado, ou com aba aberta, tarefa (worktree), card na fila ou conversa dos últimos dias.
+// O resto fica recolhido em "Outros": a lista vem das pastas-raiz e não precisa de faxina.
+function projectInUse(project) {
+  const inside = (dir) => dir && (isInside(dir, project.path) || isInside(dir, `${project.path}.worktrees`));
+  return !!project.pinned
+    || (worktreesByProject.get(project.id) || []).length > 0
+    || tabs.some((t) => inside(t.cwd))
+    || (state.backlog || []).some((b) => b.projectId === project.id)
+    || recentConversations.some((c) => inside(c.cwd));
+}
+
+let othersOpen = false;
+try { othersOpen = localStorage.getItem('othersOpen') === '1'; } catch {}
+
+async function togglePin(project) {
+  const next = await attempt(() => deck.projects.setPinned(project.id, !project.pinned));
+  if (!next) return;
+  project.pinned = !project.pinned;
+  renderProjects();
+}
+
+const pinButton = (project) => h('button', {
+  class: `ghost pin ${project.pinned ? 'on' : ''}`,
+  title: project.pinned ? 'Desafixar (sai de "Em uso" quando não tiver nada aberto)' : 'Fixar em "Em uso"',
+  onclick: (e) => { e.stopPropagation(); togglePin(project); },
+}, project.pinned ? '★' : '☆');
+
+// Só projeto cadastrado à mão sai da lista; o de pasta-raiz voltaria sozinho.
+const removeButton = (project) => (project.inWorkspace ? null
+  : h('button', { class: 'ghost', title: 'Tirar do app (não apaga nada)', onclick: (e) => { e.stopPropagation(); removeProject(project); } }, '×'));
+
+function projectBlock(project) {
+  const worktrees = worktreesByProject.get(project.id) || [];
+  return h('li', { class: 'project' },
+    h('div', { class: 'row', title: project.path },
+      h('strong', {}, project.name),
+      agentButtons(project.path),
+      project.isRepo ? h('button', {
+        class: `ghost setup ${project.setup ? 'on' : ''}`,
+        title: project.setup ? `Preparo de worktree: ${setupSummary(project.setup)}` : 'Configurar preparo de worktree nova (.env, npm ci…)',
+        onclick: () => editSetup(project),
+      }, '⚙') : null,
+      pinButton(project),
+      removeButton(project)),
+    project.isRepo
+      ? h('button', { class: 'new-task', onclick: () => newTask(project) }, '+ nova tarefa (worktree)')
+      : null,
+    h('ul', { class: 'worktrees' }, worktrees.map((wt) =>
+      h('li', { class: 'row', title: [wt.path, wt.description].filter(Boolean).join('\n\n') },
+        h('span', { class: 'branch' }, (wt.branch || basename(wt.path)).replace(/^task\//, '')),
+        wt.ahead ? h('span', { class: 'badge', title: `${wt.ahead} commit(s) à frente de ${wt.base}` }, `↑${wt.ahead}`) : null,
+        wt.dirty ? h('span', { class: 'badge dirty', title: `${wt.dirty} arquivo(s) sem commit` }, `●${wt.dirty}`) : null,
+        agentButtons(wt.path),
+        h('span', { class: 'actions' },
+          h('button', { title: 'Revisar o que a tarefa mudou (diff)', onclick: () => openDiff(project.path, wt.path) }, '±'),
+          wt.managed ? h('button', { title: 'Concluir tarefa: integrar na base e limpar', onclick: () => concludeTask(project, wt) }, '✓') : null),
+        wt.managed
+          ? h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')
+          : h('span', { class: 'external muted small', title: `Criada fora do app (${wt.path}); remova por onde ela foi criada.` }, 'externa')))));
+}
+
+// Linha enxuta de "Outros": nome e, no hover, os atalhos.
+function projectLine(project) {
+  return h('li', { class: 'project compact' },
+    h('div', { class: 'row', title: project.path },
+      h('span', { class: 'name' }, project.name),
+      agentButtons(project.path),
+      project.isRepo ? h('span', { class: 'actions' },
+        h('button', { title: 'Nova tarefa (worktree)', onclick: (e) => { e.stopPropagation(); newTask(project); } }, '+')) : null,
+      pinButton(project),
+      removeButton(project)));
+}
+
 function renderProjects() {
   const list = $('#projects');
   if (!state.projects.length) {
-    list.replaceChildren(h('li', { class: 'muted hint' }, 'Clique em + para adicionar uma pasta.'));
+    list.replaceChildren(h('li', { class: 'muted hint' }, 'Clique em + e escolha a pasta onde ficam seus projetos.'));
+    refreshViews();
     return;
   }
-  list.replaceChildren(...state.projects.map((project) => {
-    const worktrees = worktreesByProject.get(project.id) || [];
-    return h('li', { class: 'project' },
-      h('div', { class: 'row', title: project.path },
-        h('strong', {}, project.name),
-        agentButtons(project.path),
-        project.isRepo ? h('button', {
-          class: `ghost setup ${project.setup ? 'on' : ''}`,
-          title: project.setup ? `Preparo de worktree: ${setupSummary(project.setup)}` : 'Configurar preparo de worktree nova (.env, npm ci…)',
-          onclick: () => editSetup(project),
-        }, '⚙') : null,
-        h('button', { class: 'ghost', title: 'Remover do app (não apaga nada)', onclick: () => removeProject(project) }, '×')),
-      project.isRepo
-        ? h('button', { class: 'new-task', onclick: () => newTask(project) }, '+ nova tarefa (worktree)')
-        : h('div', { class: 'muted hint' }, 'Sem git: worktrees indisponíveis'),
-      h('ul', { class: 'worktrees' }, worktrees.map((wt) =>
-        h('li', { class: 'row', title: [wt.path, wt.description].filter(Boolean).join('\n\n') },
-          h('span', { class: 'branch' }, (wt.branch || basename(wt.path)).replace(/^task\//, '')),
-          wt.ahead ? h('span', { class: 'badge', title: `${wt.ahead} commit(s) à frente de ${wt.base}` }, `↑${wt.ahead}`) : null,
-          wt.dirty ? h('span', { class: 'badge dirty', title: `${wt.dirty} arquivo(s) sem commit` }, `●${wt.dirty}`) : null,
-          agentButtons(wt.path),
-          h('span', { class: 'actions' },
-            h('button', { title: 'Revisar o que a tarefa mudou (diff)', onclick: () => openDiff(project.path, wt.path) }, '±'),
-            wt.managed ? h('button', { title: 'Concluir tarefa: integrar na base e limpar', onclick: () => concludeTask(project, wt) }, '✓') : null),
-          wt.managed
-            ? h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')
-            : h('span', { class: 'external muted small', title: `Criada fora do app (${wt.path}); remova por onde ela foi criada.` }, 'externa')))));
-  }));
+  const filter = $('#project-filter').value.trim().toLowerCase();
+  const shown = state.projects.filter((p) => !filter || p.name.toLowerCase().includes(filter));
+  const active = shown.filter(projectInUse);
+  const others = shown.filter((p) => !active.includes(p));
+  const open = othersOpen || !!filter;
+  list.replaceChildren(
+    ...active.map(projectBlock),
+    !active.length && !filter ? h('li', { class: 'muted hint' }, 'Nada em uso. Abra um agente num projeto de "Outros" ou fixe um com ☆.') : null,
+    others.length ? h('li', { class: 'others-head' },
+      h('button', {
+        class: 'ghost others-toggle',
+        onclick: () => {
+          othersOpen = !othersOpen;
+          try { localStorage.setItem('othersOpen', othersOpen ? '1' : ''); } catch {}
+          renderProjects();
+        },
+      }, `${open ? '▾' : '▸'} Outros (${others.length})`)) : null,
+    ...(open ? others.map(projectLine) : []),
+    filter && !shown.length ? h('li', { class: 'muted hint' }, 'Nenhum projeto com esse nome.') : null);
   refreshViews();
+}
+
+// Abas abrem e fecham em rajadas (restauração): redesenha a barra uma vez só.
+let projectsQueued = false;
+function queueProjects() {
+  if (projectsQueued) return;
+  projectsQueued = true;
+  setTimeout(() => {
+    projectsQueued = false;
+    renderProjects();
+  }, 0);
 }
 
 // ---------- tarefas: modelo comum do quadro e do escritório ----------
@@ -1008,7 +1086,7 @@ async function refreshRecent() {
   const list = await attempt(() => deck.agents.recent());
   if (!list) return;
   recentConversations = list;
-  refreshViews();
+  renderProjects();
 }
 
 // Recentes que não estão abertas em nenhuma aba (uma por conversa).
@@ -1130,10 +1208,21 @@ async function newTaskAnywhere() {
   else if (values) toast('Escolha o projeto da tarefa.');
 }
 
-async function addProject() {
-  const project = await attempt(() => deck.projects.add());
-  if (!project) return;
-  await refreshState();
+// + de Projetos: pasta-raiz (cada subpasta vira projeto, inclusive as que você criar depois) ou uma pasta solta.
+function addProject(e) {
+  const box = e.currentTarget.getBoundingClientRect();
+  contextMenu(box.left, box.bottom + 2, [
+    { label: 'Pasta-raiz: cada subpasta vira projeto', onclick: async () => { if (await attempt(() => deck.projects.addWorkspace())) await refreshState(); } },
+    { label: 'Uma pasta só', onclick: async () => { if (await attempt(() => deck.projects.add())) await refreshState(); } },
+    ...(state.workspaces?.length ? [{ header: true, label: 'Pastas-raiz' }] : []),
+    ...(state.workspaces || []).map((dir) => ({
+      label: `Parar de ler "${basename(dir)}"`, hint: dir, indent: true,
+      onclick: async () => {
+        if (!confirm(`Parar de ler "${dir}"?\n\nOs projetos dela saem da barra (os que têm card na fila ficam). Nenhum arquivo é apagado.`)) return;
+        if (await attempt(() => deck.projects.removeWorkspace(dir))) await refreshState();
+      },
+    })),
+  ]);
 }
 
 const setupSummary = (setup) => [
@@ -1171,7 +1260,7 @@ async function removeProject(project) {
   const queued = (state.backlog || []).filter((b) => b.projectId === project.id).length;
   const open = tabs.filter((t) => t.cwd && isInside(t.cwd, project.path)).length;
   if (!confirm([
-    `Remover "${project.name}" da lista do app?`,
+    `Tirar "${project.name}" do app?`,
     'Nenhum arquivo é apagado: dá para cadastrar a pasta de novo pelo + de Projetos.',
     queued ? `${queued} tarefa(s) na fila "A fazer" são desse projeto: ficam esperando e voltam a funcionar quando a pasta for cadastrada de novo.` : '',
     open ? `${open} aba(s) abertas nele continuam abertas.` : '',
@@ -1474,7 +1563,22 @@ async function refreshState() {
   refreshUsage();
 }
 
+async function refreshProjects() {
+  const next = await attempt(() => deck.state());
+  if (!next) return;
+  await Promise.all(next.projects.map(loadWorktrees));
+  state = next;
+  renderProjects();
+}
+
 $('#add-project').addEventListener('click', addProject);
+$('#project-filter').addEventListener('input', () => renderProjects());
+$('#project-filter').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.target.value = '';
+    renderProjects();
+  }
+});
 $('#add-profile').addEventListener('click', addProfile);
 $('#refresh-usage').addEventListener('click', () => refreshUsage(true));
 $('#new-tab').addEventListener('click', () => newTabDialog());
@@ -1602,7 +1706,8 @@ for (const button of document.querySelectorAll('#layouts button')) {
 }
 
 window.addEventListener('focus', () => {
-  for (const project of state.projects) loadWorktrees(project).then(renderProjects);
+  // Pasta nova criada lá fora aparece ao voltar para o app.
+  refreshProjects();
   // Voltou para o app: a aba que está na sua frente já foi vista.
   if (activeTab?.attention) {
     activeTab.attention = false;

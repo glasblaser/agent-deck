@@ -11,7 +11,8 @@
 <body>
   <aside id="sidebar">
     <section>
-      <header><h2>Projetos</h2><button id="add-project" title="Adicionar pasta de projeto">+</button></header>
+      <header><h2>Projetos</h2><button id="add-project" title="Pasta-raiz ou pasta de projeto">+</button></header>
+      <input id="project-filter" type="search" placeholder="Filtrar projetos…" aria-label="Filtrar projetos" />
       <ul id="projects" class="list"></ul>
     </section>
     <section>
@@ -45,7 +46,7 @@
     <div id="panes">
       <div id="empty">
         <p>Nenhuma aba aberta.</p>
-        <p class="muted">Adicione um projeto à esquerda e abra um agente, ou use <kbd>Ctrl+T</kbd>.</p>
+        <p class="muted">Abra um agente num projeto à esquerda, ou use <kbd>Ctrl+T</kbd>.</p>
       </div>
     </div>
   </main>

@@ -82,13 +82,18 @@ saem do estado real dos agentes e do git, então o quadro não tem como ficar de
 Cada card mostra o briefing, cada agente com estado e há quanto tempo ("trabalhando · há 4 min") e a
 **última fala** do agente, lida do fim da conversa em disco: texto, ou a ferramenta que ele está pedindo
 enquanto espera ("Pediu: Write: src/a.js"). Agentes rodando na própria pasta do projeto aparecem como a
-tarefa "(raiz)" dele. O Codex não publica status nem uma última fala legível.
+tarefa "(raiz)" dele. No Codex, estado e última fala vêm do arquivo de rollout (`task_started` /
+`task_complete`); ele não tem "esperando você", e um turno interrompido com Esc vira "parado" depois de 5 minutos.
 
 ### No dia a dia
 
 - **Painéis**: 1, 2 lado a lado ou 4 (2×2) — botões no canto da barra de abas ou Ctrl+Shift+1/2/4.
   Clicar numa aba fora da tela coloca ela no painel focado (borda amarela).
 - **Sidebar**: arraste a borda para mudar a largura; Ctrl+Shift+B esconde.
+- **Projetos**: sem cadastrar nem remover. Em "+ → Pasta-raiz", cada subpasta vira projeto, inclusive as criadas
+  depois (menos `_nome`, `.nome` e `*.worktrees`); "Uma pasta só" adiciona uma avulsa. A barra mostra "Em uso"
+  (aba aberta, tarefa, card na fila, conversa dos últimos 3 dias ou fixado com ☆) e recolhe o resto em "Outros",
+  com filtro no topo. Na primeira abertura, a pasta que já tem dois ou mais projetos cadastrados vira raiz.
 - **Paleta de comandos**: Ctrl+Shift+P de qualquer lugar, ou Ctrl+K fora do terminal e do editor (no prompt do
   agente o Ctrl+K apaga até o fim da linha). Busca aproximada em abas, tarefas (e diff/concluir), fila "A fazer",
   ações por projeto e layout.
@@ -98,7 +103,7 @@ tarefa "(raiz)" dele. O Codex não publica status nem uma última fala legível.
   não está olhando, ela fica destacada ("terminou") até receber foco. Quando o Claude pede permissão a aba
   fica vermelha ("esperando você": o arquivo de sessão diz `status: "waiting"`). Com o app em segundo plano,
   os dois casos geram notificação do Windows e piscam a barra de tarefas; clicar na notificação abre a aba.
-  O Codex não publica status.
+  O Codex também mostra trabalhando/terminou (lido do rollout), mas nunca "esperando você".
 - **Reabrir**: ao abrir, o app recria as abas da última vez. Claude volta com `claude --resume <id>`
   (cada aba na sua conversa; o app abre cada uma com `--session-id` próprio). Sem nenhuma mensagem
   enviada, não há conversa em disco e abre uma nova. Codex volta com `codex resume <id>` quando o id

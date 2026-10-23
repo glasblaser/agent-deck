@@ -72,6 +72,20 @@ kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 
 .actions button { padding: 0 5px; font-size: 11px; }
 .worktrees li { padding: 3px 0 3px 12px; }
 .new-task { margin: 5px 0 2px; width: 100%; background: none; border-style: dashed; color: var(--muted); }
+/* barra de projetos: filtro, "Em uso" completo e "Outros" recolhido em linhas enxutas */
+#project-filter { width: 100%; margin-bottom: 6px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; font: inherit; font-size: 12px; }
+.project.compact { padding: 2px 0; border-bottom: none; }
+.project.compact .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.project.compact:hover .name { color: var(--text); }
+.project.compact .actions { display: none; }
+.project.compact:hover .actions { display: flex; }
+.project.compact .pin:not(.on) { visibility: hidden; }
+.project.compact:hover .pin { visibility: visible; }
+.pin { padding: 0 4px; }
+.pin.on { color: var(--accent); }
+.others-head { margin-top: 8px; }
+.others-toggle { padding: 2px 0; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.others-toggle:hover { color: var(--text); }
 
 .account { background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 8px; }
 .account.claude { border-left-color: var(--claude); }

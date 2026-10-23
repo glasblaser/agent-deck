@@ -106,7 +106,13 @@ module.exports = function smoke(app, win, outDir) {
     g(repo, 'commit', '-m', 'init');
     // Ignorado pelo git: não vem com a worktree; o preparo tem que copiar.
     fs.writeFileSync(path.join(repo, '.env'), 'SMOKE_ENV=1\n');
-    require('./store').addProject(repo);
+    const store = require('./store');
+    // Fixado: sem aba nem worktree ainda, ele iria para "Outros" e o teste usa o ⚙ dele.
+    store.setProjectPinned(store.addProject(repo).id, true);
+    // Pasta-raiz: subpastas viram projeto; as de apoio (_x, .worktrees) não.
+    const ws = path.join(outDir, `ws-${Date.now()}`);
+    for (const name of ['alfa', 'beta', '_apoio', 'alfa.worktrees']) fs.mkdirSync(path.join(ws, name), { recursive: true });
+    store.addWorkspace(ws);
     const MARK = 'SMOKE-BRIEFING';
     const writes = [];
     const write = ptys.write;
@@ -120,6 +126,11 @@ module.exports = function smoke(app, win, outDir) {
         await sleep(2500);
         log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)') + (t.classList.contains('active') ? ' [NA FRENTE]' : '')))`)}`);
         await sleep(1500);
+        const sidebar = () => run(`JSON.stringify({ emUso: [...document.querySelectorAll('.project:not(.compact) strong')].map((e) => e.textContent), outros: document.querySelector('.others-toggle')?.textContent, linhas: [...document.querySelectorAll('.project.compact .name')].map((e) => e.textContent) })`);
+        log.push(`barra: ${await sidebar()}`);
+        await run(`(() => { const i = document.querySelector('#project-filter'); i.value = 'alf'; i.dispatchEvent(new Event('input')); })()`);
+        log.push(`barra filtrada "alf": ${await sidebar()}`);
+        await run(`(() => { const i = document.querySelector('#project-filter'); i.value = ''; i.dispatchEvent(new Event('input')); })()`);
         log.push(`conversas fechadas no quadro: ${await run(`JSON.stringify([...document.querySelectorAll(".recent-item strong")].map((e) => e.textContent).slice(0, 4))`)}`);
         const key = (keyCode, modifiers = []) => {
           win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
@@ -209,7 +220,7 @@ module.exports = function smoke(app, win, outDir) {
             log.push(`trust na tela; briefing já escrito no pty? ${writes.some((w) => w.data.includes(MARK))}`);
             if (!sentDuringTrust) {
               sentDuringTrust = true;
-              await run(`document.querySelector('.project:last-child [title="Terminal aqui"]').click()`);
+              await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('[title="Terminal aqui"]').click()`);
               await sleep(2500);
               await sendFromTerminal('durante-trust');
             }

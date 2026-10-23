@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('deck', {
     setSetup: invoke('projects:setSetup'),
     add: invoke('projects:add'),
     remove: invoke('projects:remove'),
+    addWorkspace: invoke('projects:addWorkspace'),
+    removeWorkspace: invoke('projects:removeWorkspace'),
+    setPinned: invoke('projects:setPinned'),
   },
   git: {
     worktrees: invoke('git:worktrees'),
