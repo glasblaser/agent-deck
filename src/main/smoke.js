@@ -145,14 +145,14 @@ module.exports = function smoke(app, win, outDir) {
           await sleep(300);
           clipboard.writeText(`${SEND} ${label}`);
           const before = await run('__toasts.length');
-          await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Terminal')).click()`);
+          await run(`document.querySelector('.tab[data-kind="shell"]').click()`);
           await sleep(500);
           await run(`document.querySelector('.frame:not([hidden]) .pane').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 }))`);
           await sleep(300);
           await run(`[...document.querySelectorAll('.context-menu button.indent')].filter((b) => b.textContent.includes('teste-briefing')).at(-1)?.click()`);
           await sleep(1000);
           log.push(`envio ${label}: colado=${writes.some((w) => w.data.includes(`${SEND} ${label}`))} toast=${JSON.stringify((await run('__toasts')).slice(before))}`);
-          await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('teste-briefing')).click()`);
+          await run(`document.querySelector('.tab[data-kind="claude"]').click()`);
           await sleep(500);
         };
         const readBoard = async (label) => {
@@ -166,7 +166,7 @@ module.exports = function smoke(app, win, outDir) {
               + (k.querySelector('.account-tag') ? ' {conta ' + k.querySelector('.account-tag').textContent + ' ' + getComputedStyle(k.querySelector('.account-tag')).backgroundColor + ' / faixa ' + getComputedStyle(k).borderLeftColor + '}' : ''))])))`)}`);
           log.push(`abas com conta: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + ' -> ' + (t.dataset.account ? t.dataset.account + ' ' + getComputedStyle(t).borderBottomColor : 'sem conta')))`)}`);
           await shot(`t-quadro-${label}`);
-          await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('Claude')).click()`);
+          await run(`document.querySelector('.tab[data-kind="claude"]').click()`);
           await sleep(300);
         };
         let sentDuringTrust = false;
@@ -198,7 +198,7 @@ module.exports = function smoke(app, win, outDir) {
         const seen = [];
         for (let i = 0; i < 90; i += 1) {
           await sleep(1000);
-          const st = await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status || '-'`);
+          const st = await run(`document.querySelector('.tab[data-kind="claude"]')?.dataset.status || '-'`);
           if (seen.at(-1) !== st) seen.push(st);
           if (seen.includes('busy') && st === 'idle') break;
         }
@@ -232,8 +232,8 @@ module.exports = function smoke(app, win, outDir) {
         let waitingSeen = null;
         for (let i = 0; i < 60 && !waitingSeen; i += 1) {
           await sleep(1000);
-          const st = await run(`JSON.stringify({ status: [...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status, waiting: [...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.classList.contains('waiting'),
-            title: [...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.title })`);
+          const st = await run(`JSON.stringify({ status: document.querySelector('.tab[data-kind="claude"]')?.dataset.status, waiting: document.querySelector('.tab[data-kind="claude"]')?.classList.contains('waiting'),
+            title: document.querySelector('.tab[data-kind="claude"]')?.title })`);
           if (JSON.parse(st).status === 'waiting') waitingSeen = st;
         }
         log.push(`esperando você: ${waitingSeen}`);
@@ -243,10 +243,10 @@ module.exports = function smoke(app, win, outDir) {
         write(claudePty, '\x1b');
         for (let i = 0; i < 20; i += 1) {
           await sleep(1000);
-          if ((await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status`)) === 'idle') break;
+          if ((await run(`document.querySelector('.tab[data-kind="claude"]')?.dataset.status`)) === 'idle') break;
         }
         win.restore();
-        log.push(`depois do Esc: ${await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude'))?.dataset.status`)}`);
+        log.push(`depois do Esc: ${await run(`document.querySelector('.tab[data-kind="claude"]')?.dataset.status`)}`);
         await status('agente com briefing');
         await shot('t1-briefing');
 
@@ -260,7 +260,7 @@ module.exports = function smoke(app, win, outDir) {
         await readBoard('com-mudancas');
         win.focus();
         await sleep(300);
-        await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.startsWith('Claude')).click()`);
+        await run(`document.querySelector('.tab[data-kind="claude"]').click()`);
         await sleep(500);
         key('K', ['control']);
         await sleep(400);
@@ -282,6 +282,28 @@ module.exports = function smoke(app, win, outDir) {
         await sleep(15000);
         log.push(`depois de concluir: ${await run(`JSON.stringify({ abas: [...document.querySelectorAll('.tab .label')].map((e) => e.textContent),
           toasts: window.__toasts, worktrees: document.querySelectorAll('.worktrees li').length })`)}`);
+        await run(`document.querySelector('#new-tab').click()`);
+        await waitFor('!!document.querySelector("#modal select[name=cwd]")');
+        await run(`(() => { const c = document.querySelector('#modal select[name=cwd]');
+          c.value = [...c.options].find((o) => o.textContent === '${path.basename(repo)}').value;
+          document.querySelector('#modal-ok').click(); })()`);
+        await sleep(2500);
+        await run(`document.querySelector('.tab[data-kind="view"]').click()`);
+        await sleep(800);
+        const rootCard = `[...document.querySelectorAll('.view-board .card')].find((c) => c.textContent.includes('(raiz)'))`;
+        log.push(`card raiz: ${await run(`${rootCard}?.textContent.slice(0, 120) || 'não apareceu'`)}`);
+        await run(`window.confirm = (m) => { window.__confirmed = m; return true; }; [...${rootCard}.querySelectorAll('button')].find((b) => b.textContent.includes('Encerrar')).click()`);
+        await sleep(1500);
+        log.push(`encerrar: confirm=${JSON.stringify(await run('window.__confirmed'))} card raiz depois=${await run(`!!${rootCard}`)} abas=${await run(`JSON.stringify([...document.querySelectorAll('.tab .label')].map((e) => e.textContent))`)}`);
+        // Muitas abas numa janela estreita (como 1423 px): elas encolhem e a ativa fica à vista.
+        win.setSize(1180, 800);
+        for (let i = 0; i < 8; i += 1) {
+          await run(`[...document.querySelectorAll(".project")].find((p) => p.textContent.includes("${path.basename(repo)}")).querySelector("[title^=Terminal]").click()`);
+          await sleep(300);
+        }
+        await sleep(1000);
+        log.push(`muitas abas: ${await run(`JSON.stringify({ abas: document.querySelectorAll(".tab").length, larguras: [...document.querySelectorAll(".tab")].map((t) => Math.round(t.getBoundingClientRect().width)), ativaVisivel: (() => { const a = document.querySelector(".tab.active").getBoundingClientRect(); const b = document.querySelector("#tabs").getBoundingClientRect(); return a.left >= b.left - 1 && a.right <= b.right + 1; })(), botoes: Math.round(document.querySelector("#views").getBoundingClientRect().height) })`)}`);
+        await shot("t4-muitas-abas");
         log.push(`concluídas: ${await run(`JSON.stringify([...document.querySelectorAll('.col-finished .card')].map((c) => c.textContent))`)}`);
         log.push(`git log: ${g(repo, 'log', '--oneline').replace(/\n/g, ' | ')}; branches: ${g(repo, 'branch').replace(/\n/g, ',')}; worktree existe: ${fs.existsSync(wt)}`);
         await shot('t3-concluido');

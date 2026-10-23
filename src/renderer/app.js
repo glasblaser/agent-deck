@@ -286,16 +286,17 @@ function renderTabs() {
   $('#tabs').replaceChildren(...tabs.map((tab) =>
     h('div', {
       class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''} ${tab.attention ? 'attention' : ''} ${tab.status === 'waiting' ? 'waiting' : ''}`,
-      title: [tab.tooltip || tab.title, stateText(tab)].filter(Boolean).join(' · '),
+      title: [tab.title, tabProfile(tab) && `conta ${tabProfile(tab).name}`, tab.tooltip, stateText(tab)].filter(Boolean).join('\n'),
       'data-status': tab.status || null,
       'data-session': tab.sessionId || null,
       'data-account': tabProfile(tab)?.name || null,
+      'data-kind': tab.kindClass || null,
       style: tabProfile(tab) ? `--account: ${profileColor(tabProfile(tab))}` : null,
       onclick: () => activate(tab),
       onauxclick: (e) => e.button === 1 && closeTab(tab),
     },
     h('span', { class: `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}` }),
-    h('span', { class: 'label' }, tab.title),
+    h('span', { class: 'label' }, tab.shortTitle || tab.title),
     tab.pinned ? null : h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
   for (const tab of tabs) {
     tab.headLabel.textContent = tab.title;
@@ -311,6 +312,8 @@ function renderTabs() {
   for (const button of document.querySelectorAll('#layouts button')) {
     button.classList.toggle('on', Number(button.dataset.layout) === layout);
   }
+  // A aba ativa sempre à vista, mesmo com a barra rolada.
+  $('#tabs .tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   refreshViews();
 }
 
@@ -344,6 +347,8 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing, prepare
     pane,
     title: [what, profile?.name, basename(cwd)].filter(Boolean).join(' · '),
     agentLabel: [what, profile?.name].filter(Boolean).join(' · '),
+    // Na barra de abas basta a pasta: a bolinha diz o tipo (Claude/Codex/terminal) e o sublinhado, a conta.
+    shortTitle: basename(cwd),
     tooltip: cwd,
     profileId: profileId || null,
     kindClass: agent ? AGENTS[agent].kind : 'shell',
@@ -608,6 +613,7 @@ async function openEditor(root, slot) {
   const tab = addTab({
     pane,
     title: `Editor · ${basename(root)}`,
+    shortTitle: basename(root),
     tooltip: root,
     kindClass: 'editor',
     cwd: root,
@@ -726,6 +732,7 @@ async function openDiff(projectPath, worktreePath, slot) {
   const tab = addTab({
     pane,
     title: `Diff · ${basename(worktreePath)}`,
+    shortTitle: `± ${basename(worktreePath)}`,
     tooltip: worktreePath,
     kindClass: 'diff',
     cwd: worktreePath,
@@ -968,6 +975,16 @@ const taskActions = {
     if (next) setBoardData(next);
   },
   openUrl: (url) => openBrowser(url),
+  endRoot: (task) => {
+    const running = task.agents.filter((a) => ['busy', 'waiting'].includes(a.state)).length;
+    const message = [
+      `Encerrar ${task.agents.length === 1 ? 'o agente' : `os ${task.agents.length} agentes`} em ${task.project.name}?`,
+      'O que foi feito já está nos arquivos da pasta: isso só fecha as abas. A conversa continua salva no Claude (/resume).',
+      running ? `Atenção: ${running === 1 ? 'um deles ainda está' : `${running} ainda estão`} trabalhando ou esperando você e vai ser interrompido.` : '',
+    ].filter(Boolean).join('\n\n');
+    if (!confirm(message)) return;
+    for (const a of task.agents) closeTab(a.tab);
+  },
 };
 
 function setBoardData(next) {
@@ -1417,6 +1434,12 @@ $('#refresh-usage').addEventListener('click', () => refreshUsage(true));
 $('#new-tab').addEventListener('click', () => newTabDialog());
 $('#open-board').addEventListener('click', () => openBoard());
 $('#open-palette').addEventListener('click', () => showPalette());
+// Roda do mouse rola a barra de abas na horizontal.
+$('#tabs').addEventListener('wheel', (e) => {
+  if (!e.deltaY || e.shiftKey) return;
+  e.preventDefault();
+  $('#tabs').scrollLeft += e.deltaY;
+}, { passive: false });
 
 // ---------- paleta de comandos ----------
 

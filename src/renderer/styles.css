@@ -99,15 +99,19 @@ kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 
 main { display: grid; grid-template-rows: 34px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
 #tabbar { display: flex; align-items: stretch; background: var(--panel); border-bottom: 1px solid var(--line); }
 #tabs { display: flex; overflow-x: auto; min-width: 0; }
-#tabs::-webkit-scrollbar { height: 3px; }
+#tabs::-webkit-scrollbar { height: 5px; }
+#tabs::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 #new-tab { margin: 5px; }
 .tab {
   display: flex; align-items: center; gap: 6px;
-  padding: 0 6px 0 10px; max-width: 260px;
+  padding: 0 6px 0 10px; max-width: 220px;
+  /* encolhem como as de navegador; abaixo do mínimo, a barra rola (roda do mouse) */
+  flex: 0 1 auto; min-width: 110px;
   border-right: 1px solid var(--line);
   color: var(--muted); cursor: pointer; white-space: nowrap;
 }
-.tab .label { overflow: hidden; text-overflow: ellipsis; }
+.tab .label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tab .close { flex: none; }
 .tab.active { background: var(--bg); color: var(--text); box-shadow: inset 0 2px 0 var(--accent); }
 .tab.exited .label { text-decoration: line-through; }
 .tab .close { background: none; border: none; color: var(--muted); padding: 0 4px; }
@@ -218,7 +222,7 @@ dialog { width: 480px; }
 /* visões de tarefas (quadro) */
 .dot.view { background: var(--accent); border-radius: 2px; }
 #views { display: flex; align-items: center; gap: 4px; padding: 0 4px; }
-#views button { padding: 0 8px; line-height: 20px; color: var(--muted); }
+#views button { padding: 0 8px; line-height: 20px; color: var(--muted); white-space: nowrap; font-size: 14px; }
 .view { display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--bg); }
 .view-board .columns { display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 10px; padding: 10px; overflow: auto; min-height: 0; }
 .column { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--line); border-radius: 6px; }
@@ -296,3 +300,10 @@ dialog { width: 480px; }
 /* preparo de worktree: engrenagem acesa quando o projeto tem preparo configurado */
 button.ghost.setup:hover { color: var(--accent); }
 button.ghost.setup.on { color: var(--shell); }
+#views, #layouts, #new-tab { flex: none; }
+/* legível vale mais que caber tudo: a ativa e o quadro não encolhem; o × só na ativa ou no hover */
+.tab.active, .tab[data-kind="view"] { flex-shrink: 0; }
+.tab[data-kind="view"] { min-width: 0; }
+.tab:not(.active):not(:hover) .close { visibility: hidden; }
+.tab[data-kind="view"] { position: sticky; left: 0; z-index: 1; background: var(--panel); }
+.tab[data-kind="view"].active { background: var(--bg); }

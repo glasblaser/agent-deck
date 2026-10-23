@@ -60,6 +60,8 @@ function card(task, actions, h) {
     !task.agents.length && task.lastCommitAt ? h('span', { class: 'muted small' }, `commit ${ago(task.lastCommitAt)}`) : null,
     h('span', { class: 'spacer' }),
     task.agents.length ? null : h('button', { title: 'Abrir Claude nessa tarefa', onclick: (e) => { e.stopPropagation(); actions.openAgent(task); } }, 'Abrir Claude'),
+    // Agente direto na pasta do projeto: não há worktree para concluir; o fim é fechar os agentes.
+    !task.wt && task.agents.length ? h('button', { title: 'Fechar os agentes dessa pasta (o trabalho já está nos arquivos)', onclick: (e) => { e.stopPropagation(); actions.endRoot(task); } }, '■ Encerrar') : null,
     task.wt ? h('button', { title: 'Revisar o que mudou', onclick: (e) => { e.stopPropagation(); actions.diff(task); } }, '± Diff') : null,
     task.managed ? h('button', { title: 'Integrar na base e limpar', onclick: (e) => { e.stopPropagation(); actions.conclude(task); } }, '✓ Concluir') : null));
 }
