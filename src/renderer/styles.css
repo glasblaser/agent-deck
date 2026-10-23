@@ -292,3 +292,7 @@ dialog { width: 480px; }
 .card[style*="--account"] { border-left: 4px solid var(--account); }
 .card .account-tag { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 11px; font-weight: 600; color: #15171b; background: var(--account); border-radius: 3px; padding: 0 5px; }
+
+/* preparo de worktree: engrenagem acesa quando o projeto tem preparo configurado */
+button.ghost.setup:hover { color: var(--accent); }
+button.ghost.setup.on { color: var(--shell); }

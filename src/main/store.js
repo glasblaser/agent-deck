@@ -160,6 +160,38 @@ function saveSession(session) {
   save();
 }
 
+// Preparo de worktree nova: o que copiar do projeto (o git ignora, então não vem junto) e um comando
+// que roda no terminal da tarefa antes do agente. Configurado por você; o renderer só pede "prepare".
+function setProjectSetup(projectId, { copy, command } = {}) {
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) throw new Error('Projeto não encontrado.');
+  const list = (Array.isArray(copy) ? copy : String(copy || '').split(/\r?\n/))
+    .map((c) => String(c).trim().replace(/\\/g, '/')).filter(Boolean);
+  for (const rel of list) {
+    if (path.isAbsolute(rel) || rel.split('/').includes('..')) throw new Error(`Caminho tem que ser relativo ao projeto: ${rel}`);
+  }
+  const cmd = String(command || '').trim();
+  if (/[\r\n]/.test(cmd) || cmd.length > 300) throw new Error('O comando tem que ser uma linha só (até 300 caracteres).');
+  if (list.length > 30) throw new Error('No máximo 30 caminhos.');
+  if (list.length || cmd) project.setup = { copy: list, command: cmd };
+  else delete project.setup;
+  save();
+  return publicState();
+}
+
+// Projeto dono de uma worktree (pasta dentro de <projeto>.worktrees).
+function projectOfWorktree(dir) {
+  return state.projects.find((p) => within(dir, `${p.path}.worktrees`) && !within(dir, p.path)) || null;
+}
+
+function setupCommandFor(dir) {
+  return projectOfWorktree(dir)?.setup?.command || null;
+}
+
+function setupCopyFor(projectPath) {
+  return state.projects.find((p) => canonical(p.path) === canonical(projectPath))?.setup?.copy || [];
+}
+
 function removeProject(id) {
   state.projects = state.projects.filter((p) => p.id !== id);
   save();
@@ -216,7 +248,7 @@ function requireCwd(target) {
 }
 
 module.exports = {
-  load, publicState, profile, addProfile, removeProfile, setProfileColor, addProject, removeProject, getSession, saveSession,
+  load, publicState, profile, addProfile, removeProfile, setProfileColor, addProject, setProjectSetup, setupCommandFor, setupCopyFor, removeProject, getSession, saveSession,
   addBacklog, updateBacklog, removeBacklog, recordDone, removeDone,
   requireProjectPath, requireAllowedPath, requireCwd, slug, HOME,
 };

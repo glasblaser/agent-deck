@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('deck', {
     usage: invoke('profiles:usage'),
   },
   projects: {
+    suggestSetup: invoke('projects:suggestSetup'),
+    setSetup: invoke('projects:setSetup'),
     add: invoke('projects:add'),
     remove: invoke('projects:remove'),
   },

@@ -324,7 +324,7 @@ const AGENTS = {
 };
 
 // briefing: primeira mensagem para o Claude, enviada quando ele chega no prompt (ver deliverBriefing).
-function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing }) {
+function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing, prepare }) {
   const pane = h('div', { class: 'terminal' });
   const term = new Terminal({
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
@@ -407,7 +407,7 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing }) {
     if (tab.ptyId) deck.pty.resize(tab.ptyId, cols, rows);
   });
 
-  attempt(() => deck.pty.spawn({ cwd, profileId, agent, resumeId, cols: term.cols, rows: term.rows })).then((res) => {
+  attempt(() => deck.pty.spawn({ cwd, profileId, agent, resumeId, prepare: !!prepare, cols: term.cols, rows: term.rows })).then((res) => {
     if (!res) {
       term.write('\r\n\x1b[31mNão foi possível abrir o terminal.\x1b[0m\r\n');
       return;
@@ -880,6 +880,11 @@ function renderProjects() {
       h('div', { class: 'row', title: project.path },
         h('strong', {}, project.name),
         agentButtons(project.path),
+        project.isRepo ? h('button', {
+          class: `ghost setup ${project.setup ? 'on' : ''}`,
+          title: project.setup ? `Preparo de worktree: ${setupSummary(project.setup)}` : 'Configurar preparo de worktree nova (.env, npm ci…)',
+          onclick: () => editSetup(project),
+        }, '⚙') : null,
         h('button', { class: 'ghost', title: 'Remover do app (não apaga nada)', onclick: () => removeProject(project) }, '×')),
       project.isRepo
         ? h('button', { class: 'new-task', onclick: () => newTask(project) }, '+ nova tarefa (worktree)')
@@ -1043,6 +1048,37 @@ async function addProject() {
   await refreshState();
 }
 
+const setupSummary = (setup) => [
+  setup.copy.length && `copiar ${setup.copy.length === 1 ? setup.copy[0] : `${setup.copy.length} arquivos`}`,
+  setup.command && `rodar ${setup.command}`,
+].filter(Boolean).join(' e ').replace(/^./, (c) => c.toUpperCase());
+
+// Preparo de worktree nova do projeto. Sem configuração ainda, abre com a sugestão (arquivos que o git
+// ignora na raiz e comando pelo lockfile/.NET) para você revisar.
+async function editSetup(project) {
+  const suggestion = project.setup ? null : await attempt(() => deck.projects.suggestSetup(project.path));
+  const current = project.setup || suggestion || { copy: [], command: '' };
+  const values = await form(`Preparo de worktree: ${project.name}`, [
+    {
+      name: 'copy', type: 'textarea', value: current.copy.join('\n'),
+      label: `Copiar do projeto para cada worktree nova, um caminho por linha${suggestion ? ' (sugestão: o que o git ignora na raiz)' : ''}`,
+      placeholder: '.env\nappsettings.Development.json',
+    },
+    {
+      name: 'command', value: current.command,
+      label: `Comando que roda no terminal da tarefa antes do agente${suggestion?.command ? ' (sugestão)' : ''}`,
+      placeholder: 'npm ci',
+    },
+  ], 'Salvar');
+  if (!values) return;
+  const next = await attempt(() => deck.projects.setSetup(project.id, values));
+  if (!next) return;
+  // Só o preparo muda: trocar a lista inteira perderia o que o renderer calcula (isRepo).
+  project.setup = next.projects.find((p) => p.id === project.id)?.setup;
+  renderProjects();
+  toast(project.setup || values.copy || values.command ? 'Preparo salvo. Vale para as próximas tarefas desse projeto.' : 'Preparo removido.', 'info');
+}
+
 async function removeProject(project) {
   if (!confirm(`Remover "${project.name}" da lista? Nenhum arquivo é apagado.`)) return;
   await attempt(() => deck.projects.remove(project.id));
@@ -1069,14 +1105,23 @@ async function newTask(project, preset = {}) {
       onChange: (agent, inputs) => fillProfiles(inputs.profile, agent),
     },
     { name: 'profile', label: 'Conta', type: 'select', options: profileOptions('claude'), value: defaultProfile('claude')?.id },
+    ...(project.setup ? [{
+      name: 'prepare', label: 'Preparar a worktree', type: 'select', value: 'yes',
+      options: [{ value: 'yes', label: setupSummary(project.setup) }, { value: '', label: 'Não preparar' }],
+    }] : []),
   ], 'Criar');
   if (!values?.name) return false;
-  const created = await attempt(() => deck.git.createWorktree(project.path, values.name, { base: values.base, briefing: values.briefing }));
+  const prepare = values.prepare === 'yes';
+  const created = await attempt(() => deck.git.createWorktree(project.path, values.name, { base: values.base, briefing: values.briefing, prepare }));
   if (!created) return false;
+  if (prepare && project.setup.copy.length && created.copied.length < project.setup.copy.length) {
+    const missing = project.setup.copy.filter((c) => !created.copied.includes(c));
+    toast(`Preparo: não encontrei no projeto ${missing.join(', ')}.`);
+  }
   await loadWorktrees(project);
   renderProjects();
   const agent = values.agent || null;
-  openTerminal({ cwd: created.path, agent, profileId: agent ? values.profile : null, briefing: values.briefing });
+  openTerminal({ cwd: created.path, agent, profileId: agent ? values.profile : null, briefing: values.briefing, prepare });
   // O Codex não publica quando chega no prompt: o briefing vai pela área de transferência.
   if (values.briefing && agent !== 'claude') {
     navigator.clipboard.writeText(values.briefing);

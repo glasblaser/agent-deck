@@ -116,8 +116,15 @@ function registerIpc() {
 
   handle('git:worktrees', (projectPath) => git.listWorktrees(store.requireProjectPath(projectPath)));
   handle('git:branches', (projectPath) => git.branches(store.requireProjectPath(projectPath)));
-  handle('git:createWorktree', (projectPath, taskName, opts) =>
-    git.createWorktree(store.requireProjectPath(projectPath), taskName, opts));
+  // A lista do que copiar vem da configuração do projeto, nunca do renderer: ele só diz se quer preparar.
+  handle('git:createWorktree', (projectPath, taskName, opts = {}) => {
+    const project = store.requireProjectPath(projectPath);
+    return git.createWorktree(project, taskName, {
+      base: opts.base, briefing: opts.briefing, copy: opts.prepare ? store.setupCopyFor(project) : [],
+    });
+  });
+  handle('projects:suggestSetup', (projectPath) => git.suggestSetup(store.requireProjectPath(projectPath)));
+  handle('projects:setSetup', (projectId, setup) => store.setProjectSetup(projectId, setup));
   handle('git:removeWorktree', (projectPath, worktreePath) =>
     git.removeWorktree(store.requireProjectPath(projectPath), worktreePath));
   handle('git:diff', (projectPath, worktreePath) => git.diff(store.requireProjectPath(projectPath), worktreePath));
@@ -137,7 +144,9 @@ function registerIpc() {
 
   handle('pty:spawn', (opts) => {
     const profile = opts.profileId ? store.profile(opts.profileId) : null;
-    return ptys.spawn({ ...opts, cwd: store.requireCwd(opts.cwd), profile });
+    const cwd = store.requireCwd(opts.cwd);
+    // Comando de preparo: o que você configurou no projeto dono dessa worktree, nunca texto do renderer.
+    return ptys.spawn({ ...opts, cwd, profile, setupCommand: opts.prepare ? store.setupCommandFor(cwd) : null });
   });
   ipcMain.on('pty:write', (_e, id, data) => ptys.write(id, data));
   ipcMain.on('pty:resize', (_e, id, cols, rows) => ptys.resize(id, cols, rows));

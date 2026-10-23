@@ -9,9 +9,12 @@ const ptys = require('./pty');
 const ptySizes = new Map();
 const realSpawn = ptys.spawn;
 const realResize = ptys.resize;
+// O que cada terminal recebeu ao abrir (agente e comando de preparo), para conferir no teste da tarefa.
+const spawned = [];
 ptys.spawn = (opts) => {
   const res = realSpawn(opts);
   ptySizes.set(res.id, { cols: opts.cols, rows: opts.rows });
+  spawned.push({ id: res.id, agent: opts.agent || null, setupCommand: opts.setupCommand || null });
   return res;
 };
 ptys.resize = (id, cols, rows) => {
@@ -71,8 +74,11 @@ module.exports = function smoke(app, win, outDir) {
     g(repo, 'config', 'user.email', 'smoke@local');
     g(repo, 'config', 'user.name', 'smoke');
     fs.writeFileSync(path.join(repo, 'a.txt'), 'linha 1\nlinha 2\n');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.env\n');
     g(repo, 'add', '.');
     g(repo, 'commit', '-m', 'init');
+    // Ignorado pelo git: não vem com a worktree; o preparo tem que copiar.
+    fs.writeFileSync(path.join(repo, '.env'), 'SMOKE_ENV=1\n');
     require('./store').addProject(repo);
     const MARK = 'SMOKE-BRIEFING';
     const writes = [];
@@ -101,10 +107,17 @@ module.exports = function smoke(app, win, outDir) {
         key('Escape');
         await sleep(300);
         log.push(`paleta depois do Esc: aberta=${await run('!!document.querySelector(".palette")')}`);
-        // Cria pela fila do quadro: "+ adicionar à fila" -> card em "A fazer" -> "▶ Começar" -> form já preenchido.
         const waitFor = async (js) => {
           for (let i = 0; i < 30 && !(await run(js)); i += 1) await sleep(500);
         };
+        // Preparo da worktree pelo ⚙ do projeto: confere a sugestão e troca o comando por um echo rápido.
+        await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('button.setup').click()`);
+        await waitFor('!!document.querySelector("#modal [name=copy]")');
+        log.push(`preparo sugerido: copy=${JSON.stringify(await run('document.querySelector("#modal [name=copy]").value'))} command=${JSON.stringify(await run('document.querySelector("#modal [name=command]").value'))}`);
+        await run(`(() => { document.querySelector('#modal [name=command]').value = 'echo PREPARO-OK'; document.querySelector('#modal-ok').click(); })()`);
+        await sleep(800);
+        log.push(`engrenagem: ${await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('button.setup').title`)}`);
+        // Cria pela fila do quadro: "+ adicionar à fila" -> card em "A fazer" -> "▶ Começar" -> form já preenchido.
         await run(`document.querySelector('.add-todo').click()`);
         await waitFor('!!document.querySelector("#modal [name=projectId]")');
         await run(`(() => {
@@ -179,6 +192,8 @@ module.exports = function smoke(app, win, outDir) {
           }
           briefingAt = writes.find((w) => w.data.includes(MARK))?.at || null;
         }
+        const claudeSpawn = spawned.find((s) => s.agent === 'claude');
+        log.push(`preparo no terminal: ${JSON.stringify(claudeSpawn)}; .env na worktree: ${fs.existsSync(path.join(`${repo}.worktrees`, 'teste-briefing', '.env'))}`);
         log.push(`trust respondido: ${!!trustedAt}; briefing colado: ${!!briefingAt}; depois do trust: ${!!(trustedAt && briefingAt > trustedAt)} (+${briefingAt - trustedAt} ms)`);
         const seen = [];
         for (let i = 0; i < 90; i += 1) {

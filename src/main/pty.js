@@ -104,8 +104,11 @@ function attach(webContents) {
 
 agents.onChange((id, info) => emit('agent:status', id, info));
 
-function spawn({ cwd, profile, agent, resumeId, cols = 120, rows = 30 }) {
+// setupCommand: preparo da worktree (configurado no projeto), digitado antes do agente na mesma linha.
+// "; " e não "&&": o PowerShell 5 não tem &&, e o agente sobe mesmo se o preparo falhar (o erro fica à vista).
+function spawn({ cwd, profile, agent, resumeId, setupCommand, cols = 120, rows = 30 }) {
   const launch = agent ? agentCommand(agent, profile, resumeId) : null;
+  const line = [setupCommand, launch?.command].filter(Boolean).join('; ');
   const id = nextId++;
   ensureHost().send({
     type: 'spawn',
@@ -113,7 +116,7 @@ function spawn({ cwd, profile, agent, resumeId, cols = 120, rows = 30 }) {
     shell: SHELL,
     args: process.platform === 'win32' ? ['-NoLogo'] : [],
     options: { name: 'xterm-256color', cols, rows, cwd, env: envFor(profile) },
-    input: launch ? `${launch.command}\r` : null,
+    input: line ? `${line}\r` : null,
   });
   alive.add(id);
   if (agent === 'claude' || agent === 'codex') agents.track(id, { kind: agent, profile, cwd, sessionId: launch.sessionId });

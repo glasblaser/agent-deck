@@ -105,7 +105,52 @@ async function branches(projectPath) {
   };
 }
 
-async function createWorktree(projectPath, taskName, { base, briefing } = {}) {
+// Copia do projeto para a worktree nova o que o git não traz (ex.: .env). Só caminhos relativos
+// dentro do projeto; o que não existir é ignorado. Devolve o que foi copiado.
+function copyIntoWorktree(projectPath, target, copy) {
+  const copied = [];
+  const root = path.resolve(projectPath);
+  for (const rel of copy || []) {
+    const from = path.resolve(root, rel);
+    if (!from.startsWith(root + path.sep) || !fs.existsSync(from)) continue;
+    const to = path.join(target, path.relative(root, from));
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.cpSync(from, to, { recursive: true, force: false, errorOnExist: false });
+    copied.push(rel);
+  }
+  return copied;
+}
+
+const SETUP_BY_FILE = [
+  ['pnpm-lock.yaml', 'pnpm install --frozen-lockfile'],
+  ['yarn.lock', 'yarn install --frozen-lockfile'],
+  ['bun.lockb', 'bun install'],
+  ['package-lock.json', 'npm ci'],
+  ['go.mod', 'go mod download'],
+];
+
+// Sugestão de preparo: arquivos que o git ignora na raiz do projeto (pastas inteiras e logs ficam de
+// fora) e um comando deduzido do lockfile ou do projeto .NET. Só sugestão: você revisa antes de salvar.
+async function suggestSetup(projectPath) {
+  const ignored = (await quiet(projectPath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory']))
+    .split(/\r?\n/).filter((f) => f && !f.endsWith('/') && !f.includes('/') && !/\.(log|tmp)$/i.test(f));
+  const copy = ignored.filter((f) => {
+    try {
+      return fs.statSync(path.join(projectPath, f)).size < 1024 * 1024;
+    } catch {
+      return false;
+    }
+  });
+  let command = SETUP_BY_FILE.find(([file]) => fs.existsSync(path.join(projectPath, file)))?.[1] || '';
+  if (!command) {
+    try {
+      if (fs.readdirSync(projectPath).some((f) => /\.(sln|csproj)$/i.test(f))) command = 'dotnet restore';
+    } catch {}
+  }
+  return { copy, command };
+}
+
+async function createWorktree(projectPath, taskName, { base, briefing, copy } = {}) {
   const name = slug(taskName);
   if (!name) throw new Error('Nome de tarefa inválido.');
   if (!(await isRepo(projectPath))) throw new Error('Esse projeto não é um repositório git.');
@@ -115,8 +160,9 @@ async function createWorktree(projectPath, taskName, { base, briefing } = {}) {
   await run(projectPath, ['worktree', 'add', '-b', branch, target, from]);
   await run(projectPath, ['config', `branch.${branch}.deckbase`, from]);
   if (briefing) await run(projectPath, ['config', `branch.${branch}.description`, briefing]);
+  const copied = copyIntoWorktree(projectPath, target, copy);
   // Caminho longo, igual ao que o `worktree list` devolve: a UI compara os dois para achar as abas da tarefa.
-  return { path: fs.realpathSync.native(target), branch, base: from };
+  return { path: fs.realpathSync.native(target), branch, base: from, copied };
 }
 
 // Worktree tem que ser uma das listadas pelo git para esse projeto (e criada pelo app, se managed).
@@ -246,4 +292,4 @@ async function removeWorktree(projectPath, worktreePath) {
   await run(projectPath, ['worktree', 'remove', target]);
 }
 
-module.exports = { listWorktrees, branches, createWorktree, diff, diffFile, conclude, finishTask, removeWorktree };
+module.exports = { listWorktrees, branches, createWorktree, suggestSetup, diff, diffFile, conclude, finishTask, removeWorktree };
