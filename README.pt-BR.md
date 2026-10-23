@@ -61,13 +61,35 @@ Teste do ciclo (cria repo descartável, abre Claude de verdade com briefing, dif
 `AGENT_DECK_SMOKE=<pasta curta> AGENT_DECK_SMOKE_TASK=1 npm start`. Use pasta curta: o git no Windows
 falha em caminho muito longo. O teste marca a pasta temporária como confiável no `~/.claude.json`.
 
+### Quadro (tela inicial)
+
+O quadro é a primeira aba, sempre aberta (Ctrl+Shift+Q traz pra frente). As colunas não são arrastadas:
+saem do estado real dos agentes e do git, então o quadro não tem como ficar desatualizado.
+
+| Coluna | O que tem |
+| --- | --- |
+| A fazer | Tarefas na fila: nome, projeto e briefing, ainda sem worktree. "▶ Começar" abre o form de nova tarefa preenchido |
+| Esperando você | Algum agente da tarefa pediu permissão ou resposta |
+| Trabalhando | Algum agente está ocupado |
+| Pra revisar | Agentes parados e a tarefa tem commits ou mudanças sem commit |
+| Parada | Sem agente, ou parada sem mudança |
+| Concluídas | Merges, squashes e PRs, registrados pelo processo principal quando dão certo (com link do PR) |
+
+Cada card mostra o briefing, cada agente com estado e há quanto tempo ("trabalhando · há 4 min") e a
+**última fala** do agente, lida do fim da conversa em disco: texto, ou a ferramenta que ele está pedindo
+enquanto espera ("Pediu: Write: src/a.js"). Agentes rodando na própria pasta do projeto aparecem como a
+tarefa "(raiz)" dele. O Codex não publica status nem uma última fala legível.
+
 ### No dia a dia
 
 - **Painéis**: 1, 2 lado a lado ou 4 (2×2) — botões no canto da barra de abas ou Ctrl+Shift+1/2/4.
   Clicar numa aba fora da tela coloca ela no painel focado (borda amarela).
 - **Sidebar**: arraste a borda para mudar a largura; Ctrl+Shift+B esconde.
 - **Status**: a bolinha da aba pulsa enquanto o Claude trabalha; quando ele termina numa aba que você
-  não está olhando, ela fica destacada ("terminou") até receber foco. O Codex não publica status.
+  não está olhando, ela fica destacada ("terminou") até receber foco. Quando o Claude pede permissão a aba
+  fica vermelha ("esperando você": o arquivo de sessão diz `status: "waiting"`). Com o app em segundo plano,
+  os dois casos geram notificação do Windows e piscam a barra de tarefas; clicar na notificação abre a aba.
+  O Codex não publica status.
 - **Reabrir**: ao abrir, o app recria as abas da última vez. Claude volta com `claude --resume <id>`
   (cada aba na sua conversa; o app abre cada uma com `--session-id` próprio). Sem nenhuma mensagem
   enviada, não há conversa em disco e abre uma nova. Codex volta com `codex resume <id>` quando o id
