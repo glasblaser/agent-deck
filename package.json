@@ -2,6 +2,7 @@
   "name": "agent-deck",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Terminal multi-agente pessoal: abas de Claude/Codex, multi-conta, worktrees, editor e navegador.",
   "main": "src/main/main.js",
   "scripts": {

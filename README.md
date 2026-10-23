@@ -1,104 +1,117 @@
 # Agent Deck
 
-Terminal multi-agente pessoal para Windows: abas de Claude Code e Codex, várias contas de cada,
-worktree git por tarefa, painel de uso por conta, editor (Monaco) e navegador embutidos.
+*[Leia em português](README.pt-BR.md)*
 
-## Rodar
+A multi-agent terminal for Windows: tabs of Claude Code and Codex, several accounts of each,
+a git worktree per task, per-account usage panel, and a built-in editor (Monaco) and browser.
+
+![Agent Deck](docs/screenshot.png)
+
+> Personal tool, built for my own workflow. Windows only, not packaged, not signed. Use at your own risk.
+
+## Run
+
+Requires Node.js, Git, and the [Claude Code](https://docs.claude.com/en/docs/claude-code) and/or
+[Codex](https://github.com/openai/codex) CLIs.
 
 ```bash
 npm install
 npm start
 ```
 
-Teste de fumaça (abre as abas, tira screenshots, grava o console e fecha):
+Smoke test (opens the tabs, takes screenshots, records the console, and closes):
 
 ```bash
-AGENT_DECK_SMOKE=/caminho/saida npm start
+AGENT_DECK_SMOKE=/output/path npm start
 ```
 
-## Como funciona
+## How it works
 
-| Parte | Onde | O que faz |
+| Part | Where | What it does |
 | --- | --- | --- |
-| Janela, IPC, protocolo `app://` | `src/main/main.js` | Único lugar com acesso a disco, rede e processos |
-| Terminais | `src/main/pty.js` | Decide shell, ambiente da conta e comando; o agente é digitado no shell, à vista |
-| ConPTY | `src/main/pty-host.js` | Processo filho (Node) que roda o `node-pty`: no main do Electron o ConPTY travava |
-| Status e sessões | `src/main/agents.js` | Lê `<conta>/sessions/<pid>.json` (Claude) e os rollouts do Codex: status e id da conversa |
-| Contas | `src/main/store.js` | Cada conta = um diretório (`~/.claude-<nome>`, `~/.codex-<nome>`) |
-| Uso/limites | `src/main/usage.js` | Lê o token salvo pela CLI e consulta o endpoint de uso |
-| Worktrees | `src/main/git.js` | `git worktree add -b task/<nome>` em `<repo>.worktrees/<nome>` |
-| Arquivos do editor | `src/main/files.js` | Leitura/escrita restritas às pastas de projeto |
-| UI | `src/renderer/` | Sandbox, sem Node, só fala com o main pela ponte do `preload` |
+| Window, IPC, `app://` protocol | `src/main/main.js` | The only place with disk, network and process access |
+| Terminals | `src/main/pty.js` | Picks shell, account environment and command; the agent is typed into the shell, in plain sight |
+| ConPTY | `src/main/pty-host.js` | Child (Node) process running `node-pty`: in Electron's main process ConPTY hung |
+| Status and sessions | `src/main/agents.js` | Reads `<account>/sessions/<pid>.json` (Claude) and Codex rollouts: status and conversation id |
+| Accounts | `src/main/store.js` | Each account = one directory (`~/.claude-<name>`, `~/.codex-<name>`) |
+| Usage/limits | `src/main/usage.js` | Reads the token saved by the CLI and queries the usage endpoint |
+| Worktrees | `src/main/git.js` | `git worktree add -b task/<name>` in `<repo>.worktrees/<name>` |
+| Editor files | `src/main/files.js` | Read/write restricted to registered project folders |
+| UI | `src/renderer/` | Sandboxed, no Node, talks to main only through the `preload` bridge |
 
-### Contas
+### Accounts
 
-- **Claude**: abas com conta não-padrão recebem `CLAUDE_CONFIG_DIR=<dir da conta>`. A conta padrão
-  usa `~/.claude` + `~/.claude.json`, como a CLI faz sem a variável.
-- **GPT**: idem com `CODEX_HOME`. Precisa do Codex CLI instalado (`npm i -g @openai/codex`).
-- Na primeira execução o app já importa `~/.claude`, `~/.codex` e qualquer `~/.claude-*` / `~/.codex-*` existente.
-- "Login" abre um terminal com a conta: Claude pede login sozinho (ou `/login`), Codex roda `codex login`.
-- Nada de trocar arquivo de credencial de lugar: cada conta tem o seu diretório, sempre.
+- **Claude**: tabs on a non-default account get `CLAUDE_CONFIG_DIR=<account dir>`. The default account
+  uses `~/.claude` + `~/.claude.json`, just like the CLI does without the variable.
+- **GPT**: same with `CODEX_HOME`. Requires the Codex CLI (`npm i -g @openai/codex`).
+- On first run the app imports `~/.claude`, `~/.codex` and any existing `~/.claude-*` / `~/.codex-*`.
+- "Login" opens a terminal on that account: Claude asks for login on its own (or `/login`), Codex runs `codex login`.
+- Credential files are never moved around: each account always has its own directory.
 
-### Tarefas (worktree do começo ao fim)
+### Tasks (worktree from start to finish)
 
-- **Criar**: "+ nova tarefa" pede nome, **base** (de onde sai e para onde volta) e um **briefing** opcional.
-  No Claude, o briefing é enviado como primeira mensagem assim que ele chega no prompt, depois do diálogo
-  "trust this folder" (o sinal é o arquivo de sessão, que só nasce após o diálogo). No Codex, que não
-  publica status, ele vai para a área de transferência.
-- Base e briefing ficam no próprio git: `branch.<b>.deckbase` e `branch.<b>.description`.
-- **Sidebar**: `↑N` = commits à frente da base, `●N` = arquivos sem commit. Botões no hover.
-- **± Diff**: tudo que a tarefa mudou desde a base, commitado ou não, no diff do Monaco.
-- **✓ Concluir**: commita o que sobrou (pede a mensagem), checa conflito antes (`git merge-tree`) e faz
-  merge `--no-ff`, squash ou PR (`git push` + `gh pr create`). Em merge/squash, fecha as abas da tarefa,
-  remove a worktree e apaga a branch, mas só se tudo dela já estiver na base. Se der conflito, nada é tocado
-  e a mensagem diz o que pedir ao agente. PR deixa a worktree; conclua de novo depois do merge para limpar.
+- **Create**: "+ new task" asks for a name, a **base** (where it branches from and merges back to) and an
+  optional **briefing**. In Claude, the briefing is sent as the first message as soon as it reaches the prompt,
+  after the "trust this folder" dialog (the signal is the session file, which only appears after the dialog).
+  In Codex, which doesn't publish status, it goes to the clipboard.
+- Base and briefing live in git itself: `branch.<b>.deckbase` and `branch.<b>.description`.
+- **Sidebar**: `↑N` = commits ahead of base, `●N` = uncommitted files. Buttons on hover.
+- **± Diff**: everything the task changed since the base, committed or not, in Monaco's diff view.
+- **✓ Finish**: commits what's left (asks for the message), checks for conflicts first (`git merge-tree`) and does
+  a `--no-ff` merge, squash, or PR (`git push` + `gh pr create`). On merge/squash it closes the task's tabs,
+  removes the worktree and deletes the branch, but only if everything in it is already in the base. On conflict
+  nothing is touched and the message says what to ask the agent. PR keeps the worktree; finish again after the merge to clean up.
 
-Teste do ciclo (cria repo descartável, abre Claude de verdade com briefing, diff, concluir):
-`AGENT_DECK_SMOKE=<pasta curta> AGENT_DECK_SMOKE_TASK=1 npm start`. Use pasta curta: o git no Windows
-falha em caminho muito longo. O teste marca a pasta temporária como confiável no `~/.claude.json`.
+Full-cycle test (creates a throwaway repo, opens a real Claude with briefing, diff, finish):
+`AGENT_DECK_SMOKE=<short path> AGENT_DECK_SMOKE_TASK=1 npm start`. Use a short path: git on Windows
+fails on very long paths. The test marks the temp folder as trusted in `~/.claude.json`.
 
-### No dia a dia
+### Day to day
 
-- **Painéis**: 1, 2 lado a lado ou 4 (2×2) — botões no canto da barra de abas ou Ctrl+Shift+1/2/4.
-  Clicar numa aba fora da tela coloca ela no painel focado (borda amarela).
-- **Sidebar**: arraste a borda para mudar a largura; Ctrl+Shift+B esconde.
-- **Status**: a bolinha da aba pulsa enquanto o Claude trabalha; quando ele termina numa aba que você
-  não está olhando, ela fica destacada ("terminou") até receber foco. O Codex não publica status.
-- **Reabrir**: ao abrir, o app recria as abas da última vez. Claude volta com `claude --resume <id>`
-  (cada aba na sua conversa; o app abre cada uma com `--session-id` próprio). Sem nenhuma mensagem
-  enviada, não há conversa em disco e abre uma nova. Codex volta com `codex resume <id>` quando o id
-  foi descoberto. O que estava rodando no momento de fechar é interrompido.
-- **Entre agentes**: botão direito num terminal → "Enviar seleção/área de transferência para" outra aba de
-  agente. Cola no prompt (bracketed paste), sem Enter. No Claude, selecione com Shift+arrastar.
-  Abas de Claude da **mesma conta** também conversam nativamente (`ListAgents`/`SendMessage` do Claude Code).
+- **Panes**: 1, 2 side by side, or 4 (2×2) — buttons at the corner of the tab bar or Ctrl+Shift+1/2/4.
+  Clicking an off-screen tab puts it in the focused pane (yellow border).
+- **Sidebar**: drag the edge to resize; Ctrl+Shift+B hides it.
+- **Status**: the tab dot pulses while Claude works; when it finishes in a tab you're not looking at, the tab
+  stays highlighted ("done") until it gets focus. Codex doesn't publish status.
+- **Reopen**: on start, the app recreates the tabs from last time. Claude comes back with `claude --resume <id>`
+  (each tab in its own conversation; the app opens each one with its own `--session-id`). With no message
+  sent there's no conversation on disk, so a new one opens. Codex comes back with `codex resume <id>` when the id
+  was discovered. Whatever was running when the app closed is interrupted.
+- **Between agents**: right-click a terminal → "Send selection/clipboard to" another agent tab. Pastes into
+  the prompt (bracketed paste), no Enter. In Claude, select with Shift+drag.
+  Claude tabs on the **same account** can also talk natively (Claude Code's `ListAgents`/`SendMessage`).
 
-## Segurança: o que este app faz e não faz
+## Security: what this app does and doesn't do
 
-- **Sem auto-update, sem telemetria, sem download em tempo de execução.** O app só sai para a rede
-  em dois endpoints de uso (abaixo) e no que você abrir no navegador embutido.
-- **Tokens não saem do processo principal.** A UI recebe só porcentagens e horários.
-  Tokens nunca são renovados pelo app (renovar rotaciona o refresh token e desloga a CLI).
-- **Endpoints de uso são internos e não documentados:**
-  `api.anthropic.com/api/oauth/usage` e `chatgpt.com/backend-api/wham/usage`. Podem mudar ou sumir;
-  se quebrar, só o painel de uso para de funcionar. Consulta no máximo a cada 5 min por conta.
-- **Renderer em sandbox** (`contextIsolation`, `sandbox`, sem `nodeIntegration`), CSP restrita,
-  janela principal não navega para fora de `app://`, e `app://` só serve `src/renderer` e três pastas de `node_modules`.
-- **Navegador embutido** (`<webview>`) sem preload e sem Node, popups abrem na própria aba.
-- **Editor/arquivos** só dentro das pastas de projeto cadastradas (e das worktrees delas).
-- **O renderer não manda comando livre para o shell**: só escolhe entre `claude`, `codex` e `codex login`,
-  mais um id de sessão para reabrir, que o main valida como UUID antes de pôr no comando.
-  Depois disso é um terminal normal, então o que o agente executa é responsabilidade das permissões do próprio agente.
-- **Envio entre abas** só cola em abas de agente (num terminal puro viraria comando) e só com bracketed paste
-  ativo no destino: num diálogo do agente (ex.: "trust this folder") uma quebra de linha responderia por você.
-- **Remover worktree** usa `git worktree remove` sem `--force`: com mudança não commitada, o git recusa.
+- **No auto-update, no telemetry, no runtime downloads.** The app only goes to the network for two usage
+  endpoints (below) and whatever you open in the built-in browser.
+- **Tokens never leave the main process.** The UI only receives percentages and times.
+  Tokens are never refreshed by the app (refreshing rotates the refresh token and logs the CLI out).
+- **The usage endpoints are internal and undocumented — not an official API:**
+  `api.anthropic.com/api/oauth/usage` and `chatgpt.com/backend-api/wham/usage`. They may change or disappear
+  without notice; if they break, only the usage panel stops working. Queried at most every 5 min per account.
+- **Sandboxed renderer** (`contextIsolation`, `sandbox`, no `nodeIntegration`), strict CSP,
+  the main window never navigates outside `app://`, and `app://` only serves `src/renderer` and three `node_modules` folders.
+- **Built-in browser** (`<webview>`) with no preload and no Node; popups open in the same tab.
+- **Editor/files** only inside registered project folders (and their worktrees).
+- **The renderer never sends free-form commands to the shell**: it can only pick between `claude`, `codex` and
+  `codex login`, plus a session id to resume, which main validates as a UUID before putting it in the command.
+  After that it's a normal terminal, so what the agent runs is governed by the agent's own permissions.
+- **Sending between tabs** only pastes into agent tabs (in a plain terminal it would become a command) and only
+  when bracketed paste is active at the destination: in an agent dialog (e.g. "trust this folder") a newline would answer for you.
+- **Removing a worktree** uses `git worktree remove` without `--force`: with uncommitted changes, git refuses.
 
-## Dependências (versões fixas)
+## Dependencies (pinned versions)
 
-`electron`, `node-pty`, `@xterm/xterm`, `@xterm/addon-fit`, `monaco-editor`. Nada de bundler.
-O `npm audit` acusa 2 avisos *low* no DOMPurify dentro do Monaco; irrelevante para um editor que só abre seus arquivos.
+`electron`, `node-pty`, `@xterm/xterm`, `@xterm/addon-fit`, `monaco-editor`. No bundler.
+`npm audit` reports 2 *low* warnings in DOMPurify inside Monaco; irrelevant for an editor that only opens your own files.
 
-## Antivírus
+## Antivirus
 
-O `.exe` do Electron é assinado pela própria Electron, mas o app em si não é empacotado nem assinado.
-Rodando via `npm start`, quem executa é o `electron.exe` oficial. Se algum dia empacotar, assine
-(ou o Bitdefender vai reagir igual reagiu ao Ghostex: exe sem assinatura que abre shells).
+Electron's `.exe` is signed by Electron itself, but the app is neither packaged nor signed.
+With `npm start`, the official `electron.exe` is what runs. If you ever package it, sign it — otherwise
+antivirus software tends to flag an unsigned exe that spawns shells.
+
+## License
+
+[MIT](LICENSE)
