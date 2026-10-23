@@ -1,6 +1,7 @@
 // UI do Agent Deck: sidebar (projetos/worktrees, contas/uso) e abas (terminal, editor, navegador).
 import { Terminal } from '/xterm/lib/xterm.mjs';
 import { FitAddon } from '/xterm-fit/lib/addon-fit.mjs';
+import { renderBoard } from './views.js';
 
 const deck = window.deck;
 const $ = (sel) => document.querySelector(sel);
@@ -225,6 +226,7 @@ async function restoreSession() {
       if (t.type === 'browser') openBrowser(t.url, slot);
       else if (t.type === 'editor') openEditor(t.cwd, slot);
       else if (t.type === 'diff') openDiff(t.projectPath, t.cwd, slot);
+      else if (t.type === 'board') openBoard(slot);
       else {
         const agent = ['claude', 'codex'].includes(t.type) ? t.type : null;
         openTerminal({ cwd: t.cwd, profileId: t.profileId, agent, resumeId: agent && t.sessionId, slot });
@@ -290,6 +292,7 @@ function renderTabs() {
   for (const button of document.querySelectorAll('#layouts button')) {
     button.classList.toggle('on', Number(button.dataset.layout) === layout);
   }
+  refreshViews();
 }
 
 // ---------- terminal ----------
@@ -321,6 +324,7 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing }) {
   const tab = {
     pane,
     title: [what, profile?.name, basename(cwd)].filter(Boolean).join(' · '),
+    agentLabel: [what, profile?.name].filter(Boolean).join(' · '),
     tooltip: cwd,
     kindClass: agent ? AGENTS[agent].kind : 'shell',
     cwd,
@@ -519,10 +523,16 @@ deck.pty.onStatus((id, info) => {
   if (info.status === 'waiting' && tab.status !== 'waiting') {
     notify(tab, `${tab.title} está esperando você`, `Pediu: ${info.waitingFor || 'uma resposta'}.`);
   }
+  const previous = tab.status;
   tab.waitingFor = info.waitingFor || null;
   tab.status = info.status;
   if (info.sessionId) tab.sessionId = info.sessionId;
   if (tab.briefing && info.status === 'idle') deliverBriefing(tab);
+  // Parou (terminou ou pediu algo): é quando commits e arquivos mudam; atualiza os contadores da tarefa.
+  if (['idle', 'waiting'].includes(info.status) && previous === 'busy') {
+    const project = state.projects.find((p) => (worktreesByProject.get(p.id) || []).some((w) => isInside(tab.cwd, w.path)));
+    if (project) loadWorktrees(project).then(renderProjects);
+  }
   renderTabs();
   if (sessionChanged) saveSession();
 });
@@ -866,6 +876,96 @@ function renderProjects() {
             ? h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')
             : h('span', { class: 'external muted small', title: `Criada fora do app (${wt.path}); remova por onde ela foi criada.` }, 'externa')))));
   }));
+  refreshViews();
+}
+
+// ---------- tarefas: modelo comum do quadro e do escritório ----------
+
+// Cada worktree de cada projeto é uma tarefa, com as abas de agente abertas nela e uma coluna
+// derivada do estado real. Agentes rodando direto na pasta do projeto viram a "tarefa" raiz dele.
+function taskModel() {
+  const list = [];
+  const agentsIn = (match) => tabs.filter((t) => t.isAgent && t.cwd && match(t.cwd)).map((tab) => ({ tab, state: agentState(tab) }));
+  const columnOf = (agents, changed) => {
+    const states = agents.map((a) => a.state);
+    if (states.includes('waiting')) return 'waiting';
+    if (states.includes('busy')) return 'busy';
+    return changed ? 'review' : 'idle';
+  };
+  for (const project of state.projects) {
+    const worktrees = worktreesByProject.get(project.id) || [];
+    const rootAgents = agentsIn((cwd) => isInside(cwd, project.path) && !worktrees.some((w) => isInside(cwd, w.path)));
+    if (rootAgents.length) {
+      list.push({ id: project.path, name: `${project.name} (raiz)`, project, wt: null, briefing: '', agents: rootAgents,
+        column: columnOf(rootAgents, false), ahead: 0, dirty: 0, managed: false });
+    }
+    for (const wt of worktrees) {
+      const agents = agentsIn((cwd) => isInside(cwd, wt.path));
+      list.push({
+        id: wt.path, name: (wt.branch || basename(wt.path)).replace(/^task\//, ''), project, wt,
+        briefing: wt.description || '', agents, column: columnOf(agents, wt.ahead || wt.dirty),
+        ahead: wt.ahead || 0, dirty: wt.dirty || 0, managed: !!wt.managed,
+      });
+    }
+  }
+  return list;
+}
+
+const taskActions = {
+  focus: (tab) => tabs.includes(tab) && activate(tab),
+  openAgent: (task) => newTabDialog({ cwd: task.wt?.path || task.project.path, type: 'claude' }),
+  diff: (task) => openDiff(task.project.path, task.wt.path),
+  conclude: (task) => concludeTask(task.project, task.wt),
+  newTask: () => newTaskAnywhere(),
+};
+
+// Visões vivas (quadro, escritório): redesenham sempre que abas, status ou worktrees mudam.
+const liveViews = new Set();
+let viewsQueued = false;
+function refreshViews() {
+  if (viewsQueued || !liveViews.size) return;
+  viewsQueued = true;
+  requestAnimationFrame(() => {
+    viewsQueued = false;
+    const tasks = taskModel();
+    for (const render of liveViews) render(tasks);
+  });
+}
+
+// Uma aba de visão por tipo: abrir de novo só traz a que já existe.
+function openView(kind, title, draw, slot) {
+  const existing = tabs.find((t) => t.viewKind === kind);
+  if (existing) return activate(existing);
+  const pane = h('div', { class: `view view-${kind}` });
+  const render = (tasks) => draw(pane, tasks);
+  const tab = addTab({
+    pane,
+    title,
+    kindClass: 'view',
+    viewKind: kind,
+    persist: () => ({ type: kind }),
+    onShow: () => render(taskModel()),
+    dispose: () => liveViews.delete(render),
+  }, slot);
+  liveViews.add(render);
+  render(taskModel());
+  return tab;
+}
+
+function openBoard(slot) {
+  return openView('board', 'Quadro', (pane, tasks) => renderBoard(pane, tasks, taskActions, h), slot);
+}
+
+// Nova tarefa sem estar num projeto: com um repositório só, vai direto; com vários, pergunta qual.
+async function newTaskAnywhere() {
+  const repos = state.projects.filter((p) => p.isRepo);
+  if (!repos.length) return toast('Nenhum projeto com git. Adicione um na barra lateral.');
+  if (repos.length === 1) return newTask(repos[0]);
+  const values = await form('Nova tarefa', [
+    { name: 'project', label: 'Projeto', type: 'select', value: repos[0].id, options: repos.map((p) => ({ value: p.id, label: p.name })) },
+  ], 'Continuar');
+  const project = values && repos.find((p) => p.id === values.project);
+  if (project) newTask(project);
 }
 
 async function addProject() {
@@ -1152,6 +1252,7 @@ $('#add-project').addEventListener('click', addProject);
 $('#add-profile').addEventListener('click', addProfile);
 $('#refresh-usage').addEventListener('click', () => refreshUsage(true));
 $('#new-tab').addEventListener('click', () => newTabDialog());
+$('#open-board').addEventListener('click', () => openBoard());
 
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey) return;
@@ -1165,6 +1266,9 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     const index = tabs.indexOf(activeTab);
     activate(tabs[(index + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]);
+  } else if (e.code === 'KeyQ' && e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    openBoard();
   } else if (e.code === 'KeyB' && e.shiftKey && !e.altKey) {
     // Ctrl+Shift: o Ctrl+B sozinho é do agente (no Claude Code, manda o comando pra segundo plano).
     e.preventDefault();

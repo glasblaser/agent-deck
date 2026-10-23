@@ -113,6 +113,17 @@ module.exports = function smoke(app, win, outDir) {
           await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('teste-briefing')).click()`);
           await sleep(500);
         };
+        const readBoard = async (label) => {
+          await run(`document.querySelector('#open-board').click()`);
+          await sleep(800);
+          log.push(`quadro ${label}: ${await run(`JSON.stringify(Object.fromEntries([...document.querySelectorAll('.view-board .column')].map((c) =>
+            [c.querySelector('h3').firstChild.textContent, [...c.querySelectorAll('.card')].map((k) => k.querySelector('header strong').textContent
+              + ' [' + [...k.querySelectorAll('.agent .state')].map((e) => e.textContent).join(',') + ']'
+              + [...k.querySelectorAll('.badge')].map((b) => ' ' + b.textContent).join(''))])))`)}`);
+          await shot(`t-quadro-${label}`);
+          await run(`[...document.querySelectorAll('.tab')].find((t) => t.textContent.includes('Claude')).click()`);
+          await sleep(300);
+        };
         let sentDuringTrust = false;
         let trustedAt = null;
         let briefingAt = null;
@@ -177,6 +188,7 @@ module.exports = function smoke(app, win, outDir) {
           if (JSON.parse(st).status === 'waiting') waitingSeen = st;
         }
         log.push(`esperando você: ${waitingSeen}`);
+        await readBoard('esperando');
         log.push(`notificações pedidas ao main: ${JSON.stringify(flashes)}; mostradas: ${JSON.stringify(shown)}`);
         await shot('t1b-esperando');
         write(claudePty, '\x1b');
@@ -196,6 +208,7 @@ module.exports = function smoke(app, win, outDir) {
         await run(`window.dispatchEvent(new Event('focus'))`);
         for (let i = 0; i < 20 && !(await run(`!!document.querySelector(".worktrees .badge")`)); i += 1) await sleep(500);
         log.push(`sidebar: ${await run(`[...document.querySelectorAll('.worktrees li')].map((l) => l.textContent).join(' | ')`)}`);
+        await readBoard('com-mudancas');
         await run(`document.querySelector('.worktrees li [title^="Revisar"]').click()`);
         const diffStart = Date.now();
         for (let i = 0; i < 40 && !(await run('document.querySelectorAll(".frame:not([hidden]) .line-insert, .frame:not([hidden]) .char-insert").length')); i += 1) await sleep(500);
