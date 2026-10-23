@@ -80,7 +80,9 @@ function todoCard(item, actions, h) {
       h('span', { class: 'spacer' }),
       h('button', { title: 'Editar', onclick: () => actions.editTodo(item) }, '✎'),
       h('button', { title: 'Tirar da fila', onclick: () => actions.removeTodo(item) }, '×'),
-      h('button', { class: 'primary', title: 'Criar a worktree e abrir o agente com o briefing', onclick: () => actions.startTodo(item) }, '▶ Começar')));
+      item.project
+        ? h('button', { class: 'primary', title: 'Criar a worktree e abrir o agente com o briefing', onclick: () => actions.startTodo(item) }, '▶ Começar')
+        : h('button', { class: 'primary', title: 'O projeto dessa tarefa saiu da lista: escolha a pasta de novo', onclick: () => actions.chooseProject(item) }, 'Escolher projeto')));
 }
 
 function doneCard(item, actions, h) {
@@ -96,7 +98,20 @@ function doneCard(item, actions, h) {
     h('button', { class: 'ghost', title: 'Tirar do histórico', onclick: (e) => { e.stopPropagation(); actions.removeDone(item); } }, '×')));
 }
 
-export function renderBoard(root, tasks, actions, h, { backlog = [], done = [] } = {}) {
+// Faixa acima das colunas: conversas recentes que não estão em nenhuma aba, com "Reabrir".
+function recentStrip(recent, actions, h) {
+  if (!recent.length) return null;
+  return h('div', { class: 'recent' },
+    h('span', { class: 'recent-title', title: 'Conversas do Claude dos últimos 3 dias que não estão abertas. Ctrl+Shift+T reabre a mais recente.' }, 'Conversas fechadas'),
+    recent.map((c) => h('button', {
+      class: 'recent-item',
+      style: c.account?.color ? `--account: ${c.account.color}` : null,
+      title: [c.title, c.cwd, c.account && `conta ${c.account.name}`, new Date(c.at).toLocaleString('pt-BR')].filter(Boolean).join('\n'),
+      onclick: () => actions.reopen(c),
+    }, h('strong', {}, c.title || 'sem título'), h('span', { class: 'muted small' }, `${c.project?.name || ''} · ${ago(c.at)}`), h('span', { class: 'reopen' }, '↺ Reabrir'))));
+}
+
+export function renderBoard(root, tasks, actions, h, { backlog = [], done = [], recent = [] } = {}) {
   const counts = Object.fromEntries(COLUMNS.map((c) => [c.id, tasks.filter((t) => t.column === c.id).length]));
   const todoColumn = h('section', { class: 'column col-todo' },
     h('h3', {}, 'A fazer', h('span', { class: 'count' }, String(backlog.length))),
@@ -115,6 +130,7 @@ export function renderBoard(root, tasks, actions, h, { backlog = [], done = [] }
       h('span', { class: 'muted small' }, `${tasks.length} tarefa(s)`),
       h('span', { class: 'spacer' }),
       h('button', { class: 'primary', onclick: () => actions.newTask() }, '+ Nova tarefa')),
+    recentStrip(recent, actions, h),
     h('div', { class: 'columns' }, todoColumn, COLUMNS.map((col) =>
       h('section', { class: `column col-${col.id}` },
         h('h3', {}, col.label, h('span', { class: 'count' }, String(counts[col.id]))),

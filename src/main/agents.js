@@ -243,4 +243,63 @@ function onChange(fn) {
   listener = fn;
 }
 
-module.exports = { track, untrack, onChange, claudeTranscriptExists };
+// Lê só um trecho do arquivo (as conversas chegam a vários MB).
+function readSlice(file, start, length) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(length);
+    return buf.subarray(0, fs.readSync(fd, buf, 0, length, start)).toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Conversas do Claude dos últimos dias, em pastas que existem e que o app pode abrir (projetos e worktrees):
+// título (ai-title do fim do arquivo), pasta (cwd do começo), conta e quando. Para reabrir com --resume.
+function recentConversations(profiles, allowed, days = 3) {
+  const since = Date.now() - days * 86400000;
+  const list = [];
+  for (const profile of profiles.filter((p) => p.kind === 'claude')) {
+    // Rodando agora em algum lugar (outra aba, outro terminal, app desktop): reabrir daria duas instâncias na mesma conversa.
+    const live = new Set(claudeSessions(configDir('claude', profile)).map((s) => s.sessionId));
+    const projects = path.join(configDir('claude', profile), 'projects');
+    let folders = [];
+    try {
+      folders = fs.readdirSync(projects);
+    } catch {}
+    for (const folder of folders) {
+      let names = [];
+      try {
+        names = fs.readdirSync(path.join(projects, folder)).filter((n) => /^[0-9a-f-]{36}\.jsonl$/i.test(n));
+      } catch {}
+      for (const name of names) {
+        const file = path.join(projects, folder, name);
+        let stat;
+        try {
+          stat = fs.statSync(file);
+        } catch {
+          continue;
+        }
+        if (stat.mtimeMs < since || stat.size < 2000 || live.has(name.slice(0, 36))) continue;
+        const head = readSlice(file, 0, Math.min(stat.size, 256 * 1024));
+        const cwdRaw = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(head)?.[1];
+        let cwd;
+        try {
+          cwd = cwdRaw && JSON.parse(`"${cwdRaw}"`);
+        } catch {}
+        if (!cwd || !fs.existsSync(cwd) || !allowed(cwd)) continue;
+        const tail = readSlice(file, Math.max(0, stat.size - 256 * 1024), Math.min(stat.size, 256 * 1024));
+        const titles = [...tail.matchAll(/"type":"ai-title","aiTitle":"((?:[^"\\]|\\.)*)"/g)];
+        let title = '';
+        try {
+          title = titles.length ? JSON.parse(`"${titles.at(-1)[1]}"`) : '';
+        } catch {}
+        // Sem título = conversa aberta e fechada sem mensagem: não há o que retomar.
+        if (title) list.push({ sessionId: name.slice(0, 36), profileId: profile.id, cwd, title, at: stat.mtimeMs });
+      }
+    }
+  }
+  return list.sort((a, b) => b.at - a.at).slice(0, 40);
+}
+
+module.exports = { track, untrack, onChange, claudeTranscriptExists, recentConversations };

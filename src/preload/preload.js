@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('deck', {
     conclude: invoke('git:conclude'),
     finishTask: invoke('git:finishTask'),
   },
+  agents: {
+    recent: invoke('agents:recent'),
+  },
   tasks: {
     addBacklog: invoke('tasks:addBacklog'),
     updateBacklog: invoke('tasks:updateBacklog'),

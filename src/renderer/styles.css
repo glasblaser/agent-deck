@@ -307,3 +307,12 @@ button.ghost.setup.on { color: var(--shell); }
 .tab:not(.active):not(:hover) .close { visibility: hidden; }
 .tab[data-kind="view"] { position: sticky; left: 0; z-index: 1; background: var(--panel); }
 .tab[data-kind="view"].active { background: var(--bg); }
+
+/* conversas fechadas: faixa acima das colunas do quadro */
+.view-board { grid-template-rows: auto auto minmax(0, 1fr); }
+.recent { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0; overflow-x: auto; }
+.recent-title { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.recent-item { flex: none; display: flex; align-items: baseline; gap: 6px; max-width: 360px; padding: 3px 8px;
+  border-left: 3px solid var(--account, var(--line)); background: var(--panel); }
+.recent-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.recent-item .reopen { color: var(--accent); flex: none; font-size: 12px; }

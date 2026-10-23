@@ -9,6 +9,7 @@ const ptys = require('./pty');
 const usage = require('./usage');
 const git = require('./git');
 const files = require('./files');
+const agents = require('./agents');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -137,6 +138,13 @@ function registerIpc() {
     return result;
   });
   handle('tasks:addBacklog', (item) => store.addBacklog(item || {}));
+  handle('agents:recent', () => agents.recentConversations(store.publicState().profiles, (dir) => {
+    try {
+      return !!store.requireAllowedPath(dir);
+    } catch {
+      return false;
+    }
+  }));
   handle('tasks:updateBacklog', (id, item) => store.updateBacklog(id, item || {}));
   handle('tasks:removeBacklog', (id) => store.removeBacklog(id));
   handle('tasks:removeDone', (id) => store.removeDone(id));

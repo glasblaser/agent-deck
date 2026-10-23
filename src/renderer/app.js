@@ -254,9 +254,14 @@ async function restoreSession() {
   }
 }
 
-function closeTab(tab) {
+// quiet: fechamento feito pelo próprio app (concluir tarefa), sem o aviso de conversa salva.
+function closeTab(tab, { quiet = false } = {}) {
   if (tab.pinned) return;
   if (tab.isDirty?.() && !confirm(`"${tab.title}" tem alterações não salvas. Fechar mesmo assim?`)) return;
+  if (!quiet && tab.isAgent && tab.sessionId && tab.kindClass === 'claude') {
+    toast('Conversa salva. Para voltar: Ctrl+Shift+T, ou no Quadro em "Conversas fechadas".', 'info');
+    setTimeout(refreshRecent, 1500);
+  }
   tab.dispose?.();
   tab.frame.remove();
   tabs.splice(tabs.indexOf(tab), 1);
@@ -964,7 +969,7 @@ const taskActions = {
     if (next) setBoardData(next);
   },
   startTodo: async (item) => {
-    const project = state.projects.find((p) => p.id === item.projectId);
+    const project = backlogProject(item);
     if (!project?.isRepo) return toast('O projeto dessa tarefa não está mais cadastrado (ou não tem git).');
     if (!(await newTask(project, item))) return;
     const next = await attempt(() => deck.tasks.removeBacklog(item.id));
@@ -975,6 +980,8 @@ const taskActions = {
     if (next) setBoardData(next);
   },
   openUrl: (url) => openBrowser(url),
+  reopen: (c) => reopenConversation(c),
+  chooseProject: (item) => editTodo(item),
   endRoot: (task) => {
     const running = task.agents.filter((a) => ['busy', 'waiting'].includes(a.state)).length;
     const message = [
@@ -986,6 +993,37 @@ const taskActions = {
     for (const a of task.agents) closeTab(a.tab);
   },
 };
+
+// Projeto de um card da fila: pelo id, ou pela pasta (o projeto saiu da lista e foi cadastrado de novo).
+function backlogProject(item) {
+  return state.projects.find((p) => p.id === item.projectId)
+    || (item.projectPath && state.projects.find((p) => p.path.toLowerCase() === item.projectPath.toLowerCase()))
+    || null;
+}
+
+// ---------- conversas fechadas: reabrir o que saiu das abas ----------
+
+let recentConversations = [];
+async function refreshRecent() {
+  const list = await attempt(() => deck.agents.recent());
+  if (!list) return;
+  recentConversations = list;
+  refreshViews();
+}
+
+// Recentes que não estão abertas em nenhuma aba (uma por conversa).
+function recentClosed() {
+  const open = new Set(tabs.map((t) => t.sessionId).filter(Boolean));
+  return recentConversations.filter((c) => !open.has(c.sessionId)).slice(0, 8).map((c) => ({
+    ...c,
+    project: state.projects.find((p) => isInside(c.cwd, p.path) || isInside(c.cwd, `${p.path}.worktrees`)) || null,
+    account: profileById(c.profileId),
+  }));
+}
+
+function reopenConversation(c) {
+  openTerminal({ cwd: c.cwd, profileId: c.profileId, agent: 'claude', resumeId: c.sessionId });
+}
 
 function setBoardData(next) {
   state.backlog = next.backlog;
@@ -1078,7 +1116,8 @@ function openView(kind, title, draw, slot, { pinned = false } = {}) {
 
 function openBoard(slot) {
   return openView('board', 'Quadro', (pane, tasks) => renderBoard(pane, tasks, taskActions, h, {
-    backlog: (state.backlog || []).map((b) => ({ ...b, project: state.projects.find((p) => p.id === b.projectId) || null })),
+    backlog: (state.backlog || []).map((b) => ({ ...b, project: backlogProject(b) })),
+    recent: recentClosed(),
     done: [...(state.done || [])].reverse(),
   }), slot, { pinned: true });
 }
@@ -1129,7 +1168,14 @@ async function editSetup(project) {
 }
 
 async function removeProject(project) {
-  if (!confirm(`Remover "${project.name}" da lista? Nenhum arquivo é apagado.`)) return;
+  const queued = (state.backlog || []).filter((b) => b.projectId === project.id).length;
+  const open = tabs.filter((t) => t.cwd && isInside(t.cwd, project.path)).length;
+  if (!confirm([
+    `Remover "${project.name}" da lista do app?`,
+    'Nenhum arquivo é apagado: dá para cadastrar a pasta de novo pelo + de Projetos.',
+    queued ? `${queued} tarefa(s) na fila "A fazer" são desse projeto: ficam esperando e voltam a funcionar quando a pasta for cadastrada de novo.` : '',
+    open ? `${open} aba(s) abertas nele continuam abertas.` : '',
+  ].filter(Boolean).join('\n\n'))) return;
   await attempt(() => deck.projects.remove(project.id));
   await refreshState();
 }
@@ -1183,7 +1229,7 @@ async function newTask(project, preset = {}) {
 // é cwd de um shell não pode ser apagada. O shell demora um pouco a soltar, daí as tentativas.
 async function finishTask(project, wt) {
   const here = tabs.filter((t) => t.cwd && isInside(t.cwd, wt.path));
-  for (const t of here) closeTab(t);
+  for (const t of here) closeTab(t, { quiet: true });
   if (here.some((t) => tabs.includes(t))) return toast('Feche as abas da tarefa para remover a worktree.');
   let result;
   for (let i = 0; i < 6 && !result; i += 1) {
@@ -1459,6 +1505,9 @@ function paletteCommands() {
   for (const item of state.backlog || []) {
     add('Começar', item.name, () => taskActions.startTodo(item), state.projects.find((p) => p.id === item.projectId)?.name);
   }
+  for (const c of recentClosed()) {
+    add('Retomar', c.title || basename(c.cwd), () => reopenConversation(c), [basename(c.cwd), c.account?.name].filter(Boolean).join(' · '));
+  }
   add('Comando', 'Nova tarefa', () => newTaskAnywhere());
   add('Comando', 'Adicionar à fila (A fazer)', () => editTodo());
   add('Comando', 'Quadro', () => openBoard(), 'Ctrl+Shift+Q');
@@ -1498,6 +1547,12 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     const index = tabs.indexOf(activeTab);
     activate(tabs[(index + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]);
+  } else if (e.code === 'KeyT' && e.shiftKey && !e.altKey) {
+    // Reabre a conversa fechada mais recente.
+    e.preventDefault();
+    const last = recentClosed()[0];
+    if (last) reopenConversation(last);
+    else toast('Nenhuma conversa fechada recente para reabrir.', 'info');
   } else if (e.code === 'KeyQ' && e.shiftKey && !e.altKey) {
     e.preventDefault();
     openBoard();
@@ -1558,6 +1613,7 @@ window.addEventListener('focus', () => {
 setInterval(() => refreshUsage(), 5 * 60 * 1000);
 setInterval(renderAccounts, 60 * 1000);
 setInterval(refreshViews, 30 * 1000);
+setInterval(refreshRecent, 60 * 1000);
 
 // Primeiro o estado (contas, projetos), depois as abas da última sessão: elas dependem dos dois.
-refreshState().then(restoreSession);
+refreshState().then(restoreSession).then(refreshRecent);

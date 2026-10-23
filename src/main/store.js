@@ -42,6 +42,38 @@ function load(userData) {
     state.profiles = seedProfiles();
     save();
   }
+  // Itens antigos da fila sem a pasta: grava a do projeto, para sobreviverem se ele sair e voltar.
+  for (const item of state.backlog || []) {
+    if (!item.projectPath) item.projectPath = state.projects.find((p) => p.id === item.projectId)?.path;
+  }
+  applyRecovery(path.join(userData, 'recovery.json'));
+}
+
+// Recuperação preparada com o app fechado (o app em uso sobrescreveria o state.json): recadastra pastas,
+// religa cards da fila e devolve abas de agente. Aplicada uma vez e renomeada para recovery.applied.json.
+function applyRecovery(recoveryFile) {
+  if (!fs.existsSync(recoveryFile)) return;
+  try {
+    const plan = JSON.parse(fs.readFileSync(recoveryFile, 'utf8'));
+    for (const dir of plan.addProjects || []) {
+      if (typeof dir === 'string' && fs.existsSync(dir)) addProject(dir);
+    }
+    for (const [id, dir] of Object.entries(plan.relinkBacklog || {})) {
+      const item = (state.backlog || []).find((b) => b.id === id);
+      const project = state.projects.find((p) => canonical(p.path) === canonical(dir));
+      if (item && project) Object.assign(item, { projectId: project.id, projectPath: project.path });
+    }
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    for (const tab of plan.reopenTabs || []) {
+      if (tab?.type !== 'claude' || !UUID.test(tab.sessionId || '') || !fs.existsSync(tab.cwd || '')) continue;
+      state.session ??= { layout: 1, focusedSlot: 0, tabs: [] };
+      if (state.session.tabs.some((t) => t.sessionId === tab.sessionId)) continue;
+      state.session.tabs.push({ type: 'claude', cwd: tab.cwd, profileId: tab.profileId || null, sessionId: tab.sessionId, slot: -1 });
+    }
+    save();
+  } finally {
+    fs.renameSync(recoveryFile, recoveryFile.replace(/\.json$/, '.applied.json'));
+  }
 }
 
 function publicState() {
@@ -60,7 +92,7 @@ function requireProject(projectId) {
 
 function addBacklog({ projectId, name, briefing }) {
   requireProject(projectId);
-  const item = { id: crypto.randomUUID(), projectId, name: text(name, 80), briefing: text(briefing, 8000), createdAt: Date.now() };
+  const item = { id: crypto.randomUUID(), projectId, projectPath: requireProject(projectId).path, name: text(name, 80), briefing: text(briefing, 8000), createdAt: Date.now() };
   if (!item.name) throw new Error('Dê um nome à tarefa.');
   state.backlog = [...(state.backlog || []), item].slice(-200);
   save();
@@ -72,7 +104,7 @@ function updateBacklog(id, { projectId, name, briefing }) {
   if (!item) throw new Error('Item não encontrado.');
   requireProject(projectId);
   if (!text(name, 80)) throw new Error('Dê um nome à tarefa.');
-  Object.assign(item, { projectId, name: text(name, 80), briefing: text(briefing, 8000) });
+  Object.assign(item, { projectId, projectPath: requireProject(projectId).path, name: text(name, 80), briefing: text(briefing, 8000) });
   save();
   return publicState();
 }

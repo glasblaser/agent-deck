@@ -119,6 +119,8 @@ module.exports = function smoke(app, win, outDir) {
       try {
         await sleep(2500);
         log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)') + (t.classList.contains('active') ? ' [NA FRENTE]' : '')))`)}`);
+        await sleep(1500);
+        log.push(`conversas fechadas no quadro: ${await run(`JSON.stringify([...document.querySelectorAll(".recent-item strong")].map((e) => e.textContent).slice(0, 4))`)}`);
         const key = (keyCode, modifiers = []) => {
           win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
           win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
