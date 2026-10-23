@@ -52,6 +52,10 @@ AGENT_DECK_SMOKE=/caminho/saida npm start
 - Base e briefing ficam no próprio git: `branch.<b>.deckbase` e `branch.<b>.description`.
 - **Sidebar**: `↑N` = commits à frente da base, `●N` = arquivos sem commit. Botões no hover.
 - **± Diff**: tudo que a tarefa mudou desde a base, commitado ou não, no diff do Monaco.
+- **Worktree que nasce pronta** (⚙ no projeto): arquivos para copiar em cada worktree nova (o que o git ignora,
+  ex.: `.env`, `appsettings.Development.json`) e um comando digitado no terminal da tarefa antes do agente
+  (`npm ci`, `dotnet restore`…). Na primeira vez vem com sugestão (ignorados na raiz do projeto, comando pelo
+  lockfile/`.sln`/`.csproj`). Daí em diante, a nova tarefa oferece "Preparar a worktree".
 - **✓ Concluir**: commita o que sobrou (pede a mensagem), checa conflito antes (`git merge-tree`) e faz
   merge `--no-ff`, squash ou PR (`git push` + `gh pr create`). Em merge/squash, fecha as abas da tarefa,
   remove a worktree e apaga a branch, mas só se tudo dela já estiver na base. Se der conflito, nada é tocado
@@ -85,6 +89,11 @@ tarefa "(raiz)" dele. O Codex não publica status nem uma última fala legível.
 - **Painéis**: 1, 2 lado a lado ou 4 (2×2) — botões no canto da barra de abas ou Ctrl+Shift+1/2/4.
   Clicar numa aba fora da tela coloca ela no painel focado (borda amarela).
 - **Sidebar**: arraste a borda para mudar a largura; Ctrl+Shift+B esconde.
+- **Paleta de comandos**: Ctrl+Shift+P de qualquer lugar, ou Ctrl+K fora do terminal e do editor (no prompt do
+  agente o Ctrl+K apaga até o fim da linha). Busca aproximada em abas, tarefas (e diff/concluir), fila "A fazer",
+  ações por projeto e layout.
+- **Cor por conta**: cada conta tem uma cor (automática, ou escolha no card da conta). Aparece na faixa e na
+  etiqueta dos cards do quadro, no sublinhado da aba e no cabeçalho do painel: dá pra ver em que conta cada agente está.
 - **Status**: a bolinha da aba pulsa enquanto o Claude trabalha; quando ele termina numa aba que você
   não está olhando, ela fica destacada ("terminou") até receber foco. Quando o Claude pede permissão a aba
   fica vermelha ("esperando você": o arquivo de sessão diz `status: "waiting"`). Com o app em segundo plano,
@@ -112,10 +121,13 @@ tarefa "(raiz)" dele. O Codex não publica status nem uma última fala legível.
 - **Navegador embutido** (`<webview>`) sem preload e sem Node, popups abrem na própria aba.
 - **Editor/arquivos** só dentro das pastas de projeto cadastradas (e das worktrees delas).
 - **O renderer não manda comando livre para o shell**: só escolhe entre `claude`, `codex` e `codex login`,
-  mais um id de sessão para reabrir, que o main valida como UUID antes de pôr no comando.
+  mais um id de sessão para reabrir, que o main valida como UUID antes de pôr no comando, e um "preparar": o
+  comando de preparo de worktree é o que *você* salvou no projeto, lido pelo main do `state.json` (uma linha,
+  digitada à vista antes do agente). Os arquivos a copiar também vêm de lá, só relativos ao projeto.
   Depois disso é um terminal normal, então o que o agente executa é responsabilidade das permissões do próprio agente.
-- **Envio entre abas** só cola em abas de agente (num terminal puro viraria comando) e só com bracketed paste
-  ativo no destino: num diálogo do agente (ex.: "trust this folder") uma quebra de linha responderia por você.
+- **Envio entre abas** só cola em abas de agente (num terminal puro viraria comando). No Claude, só depois que o
+  arquivo de sessão diz que ele está no prompt (ele não existe durante o diálogo "trust this folder", onde o texto
+  colado poderia responder por você). O bracketed paste sozinho não prova isso: o pwsh já liga o modo.
 - **Remover worktree** usa `git worktree remove` sem `--force`: com mudança não commitada, o git recusa.
 
 ## Dependências (versões fixas)

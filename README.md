@@ -57,6 +57,10 @@ AGENT_DECK_SMOKE=/output/path npm start
 - Base and briefing live in git itself: `branch.<b>.deckbase` and `branch.<b>.description`.
 - **Sidebar**: `↑N` = commits ahead of base, `●N` = uncommitted files. Buttons on hover.
 - **± Diff**: everything the task changed since the base, committed or not, in Monaco's diff view.
+- **Ready-to-use worktree** (⚙ on the project): files to copy into each new worktree (what git ignores, e.g.
+  `.env`, `appsettings.Development.json`) and a command typed in the task's terminal before the agent
+  (`npm ci`, `dotnet restore`…). The first time it's pre-filled with a suggestion (ignored files at the
+  project root, command from the lockfile/`.sln`/`.csproj`). New tasks then offer "Prepare the worktree".
 - **✓ Finish**: commits what's left (asks for the message), checks for conflicts first (`git merge-tree`) and does
   a `--no-ff` merge, squash, or PR (`git push` + `gh pr create`). On merge/squash it closes the task's tabs,
   removes the worktree and deletes the branch, but only if everything in it is already in the base. On conflict
@@ -90,6 +94,10 @@ project's "(root)" task. Codex doesn't publish status or a readable last message
 - **Panes**: 1, 2 side by side, or 4 (2×2) — buttons at the corner of the tab bar or Ctrl+Shift+1/2/4.
   Clicking an off-screen tab puts it in the focused pane (yellow border).
 - **Sidebar**: drag the edge to resize; Ctrl+Shift+B hides it.
+- **Command palette**: Ctrl+Shift+P anywhere, or Ctrl+K outside the terminal and editor (in the agent's prompt
+  Ctrl+K deletes to end of line). Fuzzy search over tabs, tasks (plus diff/finish), the to-do queue, per-project actions and layout.
+- **Account colors**: each account has a color (automatic, or pick it on the account card). It shows as the stripe
+  and tag on board cards, the tab underline and the pane header, so you can tell which account an agent is on.
 - **Status**: the tab dot pulses while Claude works; when it finishes in a tab you're not looking at, the tab
   stays highlighted ("done") until it gets focus. When Claude asks for permission the tab turns red
   ("waiting for you": the session file says `status: "waiting"`). With the app in the background, both
@@ -117,10 +125,13 @@ project's "(root)" task. Codex doesn't publish status or a readable last message
 - **Built-in browser** (`<webview>`) with no preload and no Node; popups open in the same tab.
 - **Editor/files** only inside registered project folders (and their worktrees).
 - **The renderer never sends free-form commands to the shell**: it can only pick between `claude`, `codex` and
-  `codex login`, plus a session id to resume, which main validates as a UUID before putting it in the command.
-  After that it's a normal terminal, so what the agent runs is governed by the agent's own permissions.
-- **Sending between tabs** only pastes into agent tabs (in a plain terminal it would become a command) and only
-  when bracketed paste is active at the destination: in an agent dialog (e.g. "trust this folder") a newline would answer for you.
+  `codex login`, plus a session id to resume, which main validates as a UUID before putting it in the command,
+  and a "prepare" flag: the worktree setup command is the one *you* saved on the project, read by main from
+  `state.json` (one line, typed in plain sight before the agent). The files to copy also come from there,
+  relative to the project only. After that it's a normal terminal, so what the agent runs is governed by the agent's own permissions.
+- **Sending between tabs** only pastes into agent tabs (in a plain terminal it would become a command). For Claude,
+  only once its session file reports it at the prompt (it doesn't exist during the "trust this folder" dialog,
+  where pasted text could answer for you). Bracketed paste alone doesn't prove that: pwsh turns it on itself.
 - **Removing a worktree** uses `git worktree remove` without `--force`: with uncommitted changes, git refuses.
 
 ## Dependencies (pinned versions)
