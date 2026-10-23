@@ -122,8 +122,16 @@ function registerIpc() {
   handle('git:diff', (projectPath, worktreePath) => git.diff(store.requireProjectPath(projectPath), worktreePath));
   handle('git:diffFile', (projectPath, worktreePath, mergeBase, file) =>
     git.diffFile(store.requireProjectPath(projectPath), worktreePath, mergeBase, file));
-  handle('git:conclude', (projectPath, worktreePath, opts) =>
-    git.conclude(store.requireProjectPath(projectPath), worktreePath, opts));
+  handle('git:conclude', async (projectPath, worktreePath, opts) => {
+    const project = store.requireProjectPath(projectPath);
+    const result = await git.conclude(project, worktreePath, opts);
+    if (result.mode !== 'nothing') store.recordDone(project, result);
+    return result;
+  });
+  handle('tasks:addBacklog', (item) => store.addBacklog(item || {}));
+  handle('tasks:updateBacklog', (id, item) => store.updateBacklog(id, item || {}));
+  handle('tasks:removeBacklog', (id) => store.removeBacklog(id));
+  handle('tasks:removeDone', (id) => store.removeDone(id));
   handle('git:finishTask', (projectPath, worktreePath) => git.finishTask(store.requireProjectPath(projectPath), worktreePath));
 
   handle('pty:spawn', (opts) => {

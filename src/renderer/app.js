@@ -926,7 +926,46 @@ const taskActions = {
   diff: (task) => openDiff(task.project.path, task.wt.path),
   conclude: (task) => concludeTask(task.project, task.wt),
   newTask: () => newTaskAnywhere(),
+  addTodo: () => editTodo(),
+  editTodo: (item) => editTodo(item),
+  removeTodo: async (item) => {
+    if (!confirm(`Tirar "${item.name}" da fila?`)) return;
+    const next = await attempt(() => deck.tasks.removeBacklog(item.id));
+    if (next) setBoardData(next);
+  },
+  startTodo: async (item) => {
+    const project = state.projects.find((p) => p.id === item.projectId);
+    if (!project?.isRepo) return toast('O projeto dessa tarefa não está mais cadastrado (ou não tem git).');
+    if (!(await newTask(project, item))) return;
+    const next = await attempt(() => deck.tasks.removeBacklog(item.id));
+    if (next) setBoardData(next);
+  },
+  removeDone: async (item) => {
+    const next = await attempt(() => deck.tasks.removeDone(item.id));
+    if (next) setBoardData(next);
+  },
+  openUrl: (url) => openBrowser(url),
 };
+
+function setBoardData(next) {
+  state.backlog = next.backlog;
+  state.done = next.done;
+  refreshViews();
+}
+
+// Item de "A fazer": nome, projeto e briefing, sem worktree ainda.
+async function editTodo(item) {
+  const repos = state.projects.filter((p) => p.isRepo);
+  if (!repos.length) return toast('Nenhum projeto com git. Adicione um na barra lateral.');
+  const values = await form(item ? 'Editar tarefa da fila' : 'Nova tarefa na fila (A fazer)', [
+    { name: 'name', label: 'Nome', required: true, value: item?.name, placeholder: 'ex.: corrigir-login' },
+    { name: 'projectId', label: 'Projeto', type: 'select', value: item?.projectId || repos[0].id, options: repos.map((p) => ({ value: p.id, label: p.name })) },
+    { name: 'briefing', label: 'O que fazer (vira a primeira mensagem do agente ao começar)', type: 'textarea', value: item?.briefing },
+  ], item ? 'Salvar' : 'Adicionar');
+  if (!values?.name) return;
+  const next = await attempt(() => (item ? deck.tasks.updateBacklog(item.id, values) : deck.tasks.addBacklog(values)));
+  if (next) setBoardData(next);
+}
 
 // Visões vivas (quadro, escritório): redesenham sempre que abas, status ou worktrees mudam.
 const liveViews = new Set();
@@ -963,7 +1002,10 @@ function openView(kind, title, draw, slot, { pinned = false } = {}) {
 }
 
 function openBoard(slot) {
-  return openView('board', 'Quadro', (pane, tasks) => renderBoard(pane, tasks, taskActions, h), slot, { pinned: true });
+  return openView('board', 'Quadro', (pane, tasks) => renderBoard(pane, tasks, taskActions, h, {
+    backlog: (state.backlog || []).map((b) => ({ ...b, project: state.projects.find((p) => p.id === b.projectId) || null })),
+    done: [...(state.done || [])].reverse(),
+  }), slot, { pinned: true });
 }
 
 // Nova tarefa sem estar num projeto: com um repositório só, vai direto; com vários, pergunta qual.
@@ -990,18 +1032,19 @@ async function removeProject(project) {
   await refreshState();
 }
 
-async function newTask(project) {
+// preset: nome e briefing vindos de um card de "A fazer". Devolve true se a tarefa foi criada.
+async function newTask(project, preset = {}) {
   const branches = await attempt(() => deck.git.branches(project.path));
-  if (!branches) return;
+  if (!branches) return false;
   const values = await form(`Nova tarefa em ${project.name}`, [
-    { name: 'name', label: 'Nome da tarefa (vira branch task/<nome>)', placeholder: 'ex.: corrigir-login', required: true },
+    { name: 'name', label: 'Nome da tarefa (vira branch task/<nome>)', placeholder: 'ex.: corrigir-login', required: true, value: preset.name },
     {
       name: 'base', label: 'Sai de (base, onde ela volta no final)', type: 'select', value: branches.current,
       options: branches.list.map((b) => ({ value: b, label: b })),
     },
     {
       name: 'briefing', label: 'O que fazer (opcional: vai como primeira mensagem do agente)', type: 'textarea',
-      placeholder: 'ex.: O login quebra quando o e-mail tem maiúscula. Corrija e cubra com teste.',
+      placeholder: 'ex.: O login quebra quando o e-mail tem maiúscula. Corrija e cubra com teste.', value: preset.briefing,
     },
     {
       name: 'agent', label: 'Agente', type: 'select', value: 'claude',
@@ -1010,9 +1053,9 @@ async function newTask(project) {
     },
     { name: 'profile', label: 'Conta', type: 'select', options: profileOptions('claude'), value: defaultProfile('claude')?.id },
   ], 'Criar');
-  if (!values?.name) return;
+  if (!values?.name) return false;
   const created = await attempt(() => deck.git.createWorktree(project.path, values.name, { base: values.base, briefing: values.briefing }));
-  if (!created) return;
+  if (!created) return false;
   await loadWorktrees(project);
   renderProjects();
   const agent = values.agent || null;
@@ -1022,6 +1065,7 @@ async function newTask(project) {
     navigator.clipboard.writeText(values.briefing);
     toast('Briefing copiado: cole com Ctrl+V quando o agente abrir.', 'info');
   }
+  return true;
 }
 
 // Fecha as abas da tarefa e remove worktree + branch. As abas saem antes: no Windows, pasta que
@@ -1074,6 +1118,10 @@ async function concludeTask(project, wt) {
   const values = await form(`Concluir ${wt.branch}`, fields, 'Concluir');
   if (!values) return;
   const res = await attempt(() => deck.git.conclude(project.path, wt.path, values));
+  if (res && res.mode !== 'nothing') {
+    const fresh = await attempt(() => deck.state());
+    if (fresh) setBoardData(fresh);
+  }
   if (!res) {
     // O commit das pendências pode ter entrado antes da falha: atualiza os contadores.
     await loadWorktrees(project);

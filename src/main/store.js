@@ -45,7 +45,59 @@ function load(userData) {
 }
 
 function publicState() {
-  return { profiles: state.profiles, projects: state.projects, home: HOME };
+  return { profiles: state.profiles, projects: state.projects, home: HOME, backlog: state.backlog || [], done: state.done || [] };
+}
+
+// ---------- quadro: "A fazer" (tarefas ainda sem worktree) e "Concluídas" (histórico) ----------
+
+const text = (value, max) => String(value ?? '').trim().slice(0, max);
+
+function requireProject(projectId) {
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) throw new Error('Projeto não encontrado.');
+  return project;
+}
+
+function addBacklog({ projectId, name, briefing }) {
+  requireProject(projectId);
+  const item = { id: crypto.randomUUID(), projectId, name: text(name, 80), briefing: text(briefing, 8000), createdAt: Date.now() };
+  if (!item.name) throw new Error('Dê um nome à tarefa.');
+  state.backlog = [...(state.backlog || []), item].slice(-200);
+  save();
+  return publicState();
+}
+
+function updateBacklog(id, { projectId, name, briefing }) {
+  const item = (state.backlog || []).find((b) => b.id === id);
+  if (!item) throw new Error('Item não encontrado.');
+  requireProject(projectId);
+  if (!text(name, 80)) throw new Error('Dê um nome à tarefa.');
+  Object.assign(item, { projectId, name: text(name, 80), briefing: text(briefing, 8000) });
+  save();
+  return publicState();
+}
+
+function removeBacklog(id) {
+  state.backlog = (state.backlog || []).filter((b) => b.id !== id);
+  save();
+  return publicState();
+}
+
+// Chamado pelo main quando um merge, squash ou PR deu certo: o histórico não depende da UI.
+function recordDone(projectPath, { mode, branch, base, url, description }) {
+  const project = state.projects.find((p) => p.path.toLowerCase() === String(projectPath).toLowerCase());
+  state.done = [...(state.done || []), {
+    id: crypto.randomUUID(), projectId: project?.id || null, projectName: project?.name || path.basename(projectPath),
+    name: String(branch).replace(/^task\//, ''), branch, base, mode, url: url || null,
+    briefing: text(description, 2000), at: Date.now(),
+  }].slice(-100);
+  save();
+}
+
+function removeDone(id) {
+  state.done = (state.done || []).filter((d) => d.id !== id);
+  save();
+  return publicState();
 }
 
 function profile(id) {
@@ -155,5 +207,6 @@ function requireCwd(target) {
 
 module.exports = {
   load, publicState, profile, addProfile, removeProfile, addProject, removeProject, getSession, saveSession,
+  addBacklog, updateBacklog, removeBacklog, recordDone, removeDone,
   requireProjectPath, requireAllowedPath, requireCwd, slug, HOME,
 };

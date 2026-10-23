@@ -198,7 +198,7 @@ async function conclude(projectPath, worktreePath, { mode, message } = {}) {
       if (error.code === 'ENOENT') throw new Error('A branch foi enviada, mas o GitHub CLI (gh) não está instalado para abrir o PR.');
       throw error;
     }
-    return { mode, branch: wt.branch, base, url: out.match(/https:\/\/\S+/)?.[0] || null };
+    return { mode, branch: wt.branch, base, description, url: out.match(/https:\/\/\S+/)?.[0] || null };
   }
 
   const target = (await rawWorktrees(projectPath)).find((w) => w.branch === base);
@@ -223,7 +223,7 @@ async function conclude(projectPath, worktreePath, { mode, message } = {}) {
     await quiet(target.path, ['reset', '--merge']);
     throw error;
   }
-  return { mode, branch: wt.branch, base, into: target.path };
+  return { mode, branch: wt.branch, base, description, into: target.path };
 }
 
 // Fim da tarefa: remove a worktree (sem --force: com mudança não commitada, o git recusa) e

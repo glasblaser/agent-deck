@@ -62,19 +62,60 @@ function card(task, actions, h) {
     task.managed ? h('button', { title: 'Integrar na base e limpar', onclick: (e) => { e.stopPropagation(); actions.conclude(task); } }, '✓ Concluir') : null));
 }
 
-export function renderBoard(root, tasks, actions, h) {
+const MODE_TEXT = { merge: 'merge em', squash: 'squash em', pr: 'PR para' };
+const DONE_SHOWN = 20;
+
+function todoCard(item, actions, h) {
+  return h('article', { class: 'card todo', title: item.briefing || item.name },
+    h('header', {},
+      h('strong', {}, item.name),
+      h('span', { class: 'muted small' }, item.project?.name || 'projeto removido')),
+    item.briefing ? h('p', { class: 'briefing' }, item.briefing.split('\n')[0]) : null,
+    h('footer', {},
+      h('span', { class: 'muted small' }, `na fila ${ago(item.createdAt)}`),
+      h('span', { class: 'spacer' }),
+      h('button', { title: 'Editar', onclick: () => actions.editTodo(item) }, '✎'),
+      h('button', { title: 'Tirar da fila', onclick: () => actions.removeTodo(item) }, '×'),
+      h('button', { class: 'primary', title: 'Criar a worktree e abrir o agente com o briefing', onclick: () => actions.startTodo(item) }, '▶ Começar')));
+}
+
+function doneCard(item, actions, h) {
+  return h('article', { class: `card finished ${item.url ? 'linked' : ''}`, title: [item.briefing, item.url].filter(Boolean).join('\n\n'),
+    onclick: () => item.url && actions.openUrl(item.url) },
+  h('header', {},
+    h('strong', {}, item.name),
+    h('span', { class: 'muted small' }, item.projectName)),
+  h('footer', {},
+    h('span', { class: 'muted small' }, `${MODE_TEXT[item.mode] || item.mode} ${item.base} · ${ago(item.at)}`),
+    h('span', { class: 'spacer' }),
+    item.url ? h('span', { class: 'badge' }, 'PR ↗') : null,
+    h('button', { class: 'ghost', title: 'Tirar do histórico', onclick: (e) => { e.stopPropagation(); actions.removeDone(item); } }, '×')));
+}
+
+export function renderBoard(root, tasks, actions, h, { backlog = [], done = [] } = {}) {
   const counts = Object.fromEntries(COLUMNS.map((c) => [c.id, tasks.filter((t) => t.column === c.id).length]));
+  const todoColumn = h('section', { class: 'column col-todo' },
+    h('h3', {}, 'A fazer', h('span', { class: 'count' }, String(backlog.length))),
+    h('div', { class: 'cards' },
+      backlog.map((item) => todoCard(item, actions, h)),
+      h('button', { class: 'add-todo', onclick: () => actions.addTodo() }, '+ adicionar à fila')));
+  const doneColumn = h('section', { class: 'column col-finished' },
+    h('h3', {}, 'Concluídas', h('span', { class: 'count' }, String(done.length))),
+    h('div', { class: 'cards' }, done.length
+      ? [...done.slice(0, DONE_SHOWN).map((item) => doneCard(item, actions, h)),
+        done.length > DONE_SHOWN ? h('p', { class: 'muted small empty-col' }, `e mais ${done.length - DONE_SHOWN} antigas`) : null]
+      : h('p', { class: 'muted small empty-col' }, 'Nada concluído ainda.')));
   root.replaceChildren(
     h('div', { class: 'toolbar' },
       h('strong', {}, 'Quadro'),
       h('span', { class: 'muted small' }, `${tasks.length} tarefa(s)`),
       h('span', { class: 'spacer' }),
       h('button', { class: 'primary', onclick: () => actions.newTask() }, '+ Nova tarefa')),
-    h('div', { class: 'columns' }, COLUMNS.map((col) =>
+    h('div', { class: 'columns' }, todoColumn, COLUMNS.map((col) =>
       h('section', { class: `column col-${col.id}` },
         h('h3', {}, col.label, h('span', { class: 'count' }, String(counts[col.id]))),
         h('div', { class: 'cards' },
           counts[col.id]
             ? tasks.filter((t) => t.column === col.id).map((t) => card(t, actions, h))
-            : h('p', { class: 'muted small empty-col' }, col.empty))))));
+            : h('p', { class: 'muted small empty-col' }, col.empty)))), doneColumn));
 }

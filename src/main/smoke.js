@@ -86,13 +86,26 @@ module.exports = function smoke(app, win, outDir) {
       try {
         await sleep(2500);
         log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)')))`)}`);
-        await run(`[...document.querySelectorAll('.project')].find((p) => p.textContent.includes('${path.basename(repo)}')).querySelector('.new-task').click()`);
-        for (let i = 0; i < 30 && !(await run('!!document.querySelector("#modal [name=briefing]")')); i += 1) await sleep(500);
-        log.push(`form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + (l.querySelector('select, input, textarea').value)))`)}`);
+        // Cria pela fila do quadro: "+ adicionar à fila" -> card em "A fazer" -> "▶ Começar" -> form já preenchido.
+        const waitFor = async (js) => {
+          for (let i = 0; i < 30 && !(await run(js)); i += 1) await sleep(500);
+        };
+        await run(`document.querySelector('.add-todo').click()`);
+        await waitFor('!!document.querySelector("#modal [name=projectId]")');
         await run(`(() => {
           document.querySelector('#modal [name=name]').value = 'Teste Briefing';
+          const p = document.querySelector('#modal [name=projectId]');
+          p.value = [...p.options].find((o) => o.textContent === '${path.basename(repo)}').value;
           document.querySelector('#modal [name=briefing]').value = '${MARK}: responda apenas OK, sem usar ferramentas.';
           document.querySelector('#modal-ok').click(); })()`);
+        await sleep(800);
+        log.push(`fila: ${await run(`JSON.stringify([...document.querySelectorAll('.col-todo .card')].map((c) => c.querySelector('header strong').textContent + ' / ' + c.querySelector('.briefing')?.textContent.slice(0, 30)))`)}`);
+        await run(`document.querySelector('.col-todo .card button.primary').click()`);
+        await waitFor('document.querySelector("#modal").open && document.querySelector("#modal-title").textContent.startsWith("Nova tarefa em")');
+        log.push(`form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + (l.querySelector('select, input, textarea').value)))`)}`);
+        await run(`document.querySelector('#modal-ok').click()`);
+        await sleep(1500);
+        log.push(`fila depois de começar: ${await run(`document.querySelectorAll('.col-todo .card').length`)} card(s)`);
         const screen = () => run(`[...document.querySelectorAll('.frame:not([hidden]) .xterm-rows > div')].map((e) => e.textContent).join('\\n')`);
         await run(`window.__toasts = []; new MutationObserver((list) => list.forEach((m) => m.addedNodes.forEach((n) =>
           n.classList?.contains('toast') && __toasts.push(n.textContent)))).observe(document.body, { childList: true })`);
@@ -230,6 +243,7 @@ module.exports = function smoke(app, win, outDir) {
         await sleep(15000);
         log.push(`depois de concluir: ${await run(`JSON.stringify({ abas: [...document.querySelectorAll('.tab .label')].map((e) => e.textContent),
           toasts: window.__toasts, worktrees: document.querySelectorAll('.worktrees li').length })`)}`);
+        log.push(`concluídas: ${await run(`JSON.stringify([...document.querySelectorAll('.col-finished .card')].map((c) => c.textContent))`)}`);
         log.push(`git log: ${g(repo, 'log', '--oneline').replace(/\n/g, ' | ')}; branches: ${g(repo, 'branch').replace(/\n/g, ',')}; worktree existe: ${fs.existsSync(wt)}`);
         await shot('t3-concluido');
       } catch (error) {

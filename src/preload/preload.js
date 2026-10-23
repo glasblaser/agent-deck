@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld('deck', {
     conclude: invoke('git:conclude'),
     finishTask: invoke('git:finishTask'),
   },
+  tasks: {
+    addBacklog: invoke('tasks:addBacklog'),
+    updateBacklog: invoke('tasks:updateBacklog'),
+    removeBacklog: invoke('tasks:removeBacklog'),
+    removeDone: invoke('tasks:removeDone'),
+  },
   pty: {
     spawn: invoke('pty:spawn'),
     write: (id, data) => ipcRenderer.send('pty:write', id, data),
