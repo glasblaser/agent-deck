@@ -91,7 +91,7 @@ module.exports = function smoke(app, win, outDir) {
     win.webContents.once('did-finish-load', async () => {
       try {
         await sleep(2500);
-        log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)')))`)}`);
+        log.push(`abas ao abrir: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + (t.querySelector('.close') ? '' : ' (fixa)') + (t.classList.contains('active') ? ' [NA FRENTE]' : '')))`)}`);
         const key = (keyCode, modifiers = []) => {
           win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
           win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });

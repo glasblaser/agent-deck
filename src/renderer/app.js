@@ -245,9 +245,10 @@ async function restoreSession() {
     focusedSlot = Number.isInteger(saved.focusedSlot) && saved.focusedSlot < layout ? saved.focusedSlot : 0;
     activate(null);
   } finally {
-    // O quadro é a tela inicial: sem sessão anterior ele aparece; com sessão, entra como primeira aba
-    // sem tirar do painel o que você deixou aberto.
-    if (!tabs.some((t) => t.viewKind === 'board')) openBoard(tabs.length ? -1 : undefined);
+    // O quadro é a tela inicial: ao abrir o app ele vem para o painel focado; as abas da sessão
+    // continuam lá, a um clique.
+    if (!tabs.some((t) => t.viewKind === 'board')) openBoard(-1);
+    activate(tabs.find((t) => t.viewKind === 'board'));
     restoring = false;
     saveSession();
   }
@@ -976,15 +977,50 @@ function setBoardData(next) {
 }
 
 // Item de "A fazer": nome, projeto e briefing, sem worktree ainda.
-async function editTodo(item) {
+// Seletor de projeto com "Outra pasta…" no fim: a pasta escolhida no Windows vira projeto na hora.
+// Tarefa vira worktree, então só entra pasta com git.
+function projectField(name, value) {
   const repos = state.projects.filter((p) => p.isRepo);
-  if (!repos.length) return toast('Nenhum projeto com git. Adicione um na barra lateral.');
+  return {
+    name, label: 'Projeto', type: 'select', value: value || repos[0]?.id || '',
+    options: [
+      ...(repos.length ? [] : [{ value: '', label: 'Escolha uma pasta…' }]),
+      ...repos.map((p) => ({ value: p.id, label: p.name })),
+      { value: PICK_FOLDER, label: 'Outra pasta…' },
+    ],
+    onChange: (picked, inputs) => (picked === PICK_FOLDER ? pickProjectInto(inputs[name]) : (inputs[name].dataset.previous = picked)),
+  };
+}
+
+async function pickProjectInto(select) {
+  const previous = select.dataset.previous ?? [...select.options].find((o) => o.defaultSelected)?.value ?? '';
+  const added = await attempt(() => deck.projects.add());
+  if (!added) {
+    select.value = previous;
+    return;
+  }
+  await refreshState();
+  const project = state.projects.find((p) => p.id === added.id);
+  if (!project?.isRepo) {
+    select.value = previous;
+    toast(`"${added.name}" não é um repositório git, e tarefa vira worktree. Rode "git init" nela (e um primeiro commit) antes.`);
+    return;
+  }
+  if (![...select.options].some((o) => o.value === project.id)) {
+    select.insertBefore(h('option', { value: project.id }, project.name), select.querySelector(`option[value="${PICK_FOLDER}"]`));
+  }
+  select.value = project.id;
+  select.dataset.previous = project.id;
+}
+
+async function editTodo(item) {
   const values = await form(item ? 'Editar tarefa da fila' : 'Nova tarefa na fila (A fazer)', [
     { name: 'name', label: 'Nome', required: true, value: item?.name, placeholder: 'ex.: corrigir-login' },
-    { name: 'projectId', label: 'Projeto', type: 'select', value: item?.projectId || repos[0].id, options: repos.map((p) => ({ value: p.id, label: p.name })) },
+    projectField('projectId', item?.projectId),
     { name: 'briefing', label: 'O que fazer (vira a primeira mensagem do agente ao começar)', type: 'textarea', value: item?.briefing },
   ], item ? 'Salvar' : 'Adicionar');
   if (!values?.name) return;
+  if (!values.projectId || values.projectId === PICK_FOLDER) return toast('Escolha o projeto da tarefa.');
   const next = await attempt(() => (item ? deck.tasks.updateBacklog(item.id, values) : deck.tasks.addBacklog(values)));
   if (next) setBoardData(next);
 }
@@ -1032,14 +1068,10 @@ function openBoard(slot) {
 
 // Nova tarefa sem estar num projeto: com um repositório só, vai direto; com vários, pergunta qual.
 async function newTaskAnywhere() {
-  const repos = state.projects.filter((p) => p.isRepo);
-  if (!repos.length) return toast('Nenhum projeto com git. Adicione um na barra lateral.');
-  if (repos.length === 1) return newTask(repos[0]);
-  const values = await form('Nova tarefa', [
-    { name: 'project', label: 'Projeto', type: 'select', value: repos[0].id, options: repos.map((p) => ({ value: p.id, label: p.name })) },
-  ], 'Continuar');
-  const project = values && repos.find((p) => p.id === values.project);
+  const values = await form('Nova tarefa', [projectField('project')], 'Continuar');
+  const project = values && state.projects.find((p) => p.id === values.project && p.isRepo);
   if (project) newTask(project);
+  else if (values) toast('Escolha o projeto da tarefa.');
 }
 
 async function addProject() {
