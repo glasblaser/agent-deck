@@ -511,6 +511,8 @@ function contextMenu(x, y, items) {
     return h('button', {
       class: item.indent ? 'indent' : null,
       disabled: item.disabled,
+      // Sem isso o botão rouba o foco do terminal e, ao sumir, deixa o foco no body (Ctrl+V morre).
+      onmousedown: (e) => e.preventDefault(),
       onclick: () => { menu.remove(); item.onclick?.(); },
     },
     item.kindClass ? h('span', { class: `dot ${item.kindClass}` }) : null,

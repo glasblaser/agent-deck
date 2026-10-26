@@ -183,9 +183,11 @@ function registerIpc() {
     const target = store.requireAllowedPath(dir);
     require('node:child_process').spawn('code', [`"${target}"`], { shell: true, detached: true, stdio: 'ignore' }).unref();
   });
-  // Pasta de projeto ou worktree no Explorer. Só pasta: o openPath num arquivo executaria o arquivo.
+  // Qualquer pasta no Explorer (abas de terminal podem estar fora dos projetos). Só pasta: o openPath
+  // num arquivo executaria o arquivo.
   handle('open:folder', async (dir) => {
-    const target = store.requireAllowedPath(dir);
+    if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Caminho inválido.');
+    const target = path.resolve(dir);
     if (!require('node:fs').statSync(target).isDirectory()) throw new Error('Não é uma pasta.');
     const error = await shell.openPath(target);
     if (error) throw new Error(error);

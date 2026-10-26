@@ -33,9 +33,15 @@ export function openPalette(commands, h) {
   let shown = [];
   let selected = 0;
 
+  // O input some junto com a paleta e o foco cairia no body: Ctrl+V e digitação não chegariam
+  // ao terminal. Se o comando não focou nada, volta para onde estava.
+  const previous = document.activeElement;
   const close = () => {
     backdrop.remove();
     open = null;
+    setTimeout(() => {
+      if (document.activeElement === document.body && previous?.isConnected) previous.focus();
+    });
   };
   const choose = (cmd) => {
     close();
