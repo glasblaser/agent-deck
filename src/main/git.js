@@ -76,7 +76,44 @@ async function taskBase(projectPath, branch) {
     || (await quiet(projectPath, ['branch', '--show-current']));
 }
 
-// Quanto a tarefa andou: commits à frente da base e arquivos mexidos ainda sem commit.
+const UNTRACKED_COUNTED = 200;
+
+// Linhas mudadas desde `against` (commit), com o que não foi commitado e os arquivos novos ainda fora do git
+// (contados inteiros, como o diff vai mostrar). Binário entra na conta de arquivos, sem linhas.
+async function changeStat(cwd, against) {
+  const [numstat, untracked] = await Promise.all([
+    quiet(cwd, ['diff', '--numstat', '--no-renames', against, '--']),
+    quiet(cwd, ['ls-files', '--others', '--exclude-standard', '-z']),
+  ]);
+  const stat = { files: 0, added: 0, removed: 0 };
+  for (const line of numstat.split(/\r?\n/).filter(Boolean)) {
+    const [added, removed] = line.split('\t');
+    stat.files += 1;
+    stat.added += Number(added) || 0;
+    stat.removed += Number(removed) || 0;
+  }
+  const fresh = untracked.split('\0').filter(Boolean);
+  stat.files += fresh.length;
+  for (const rel of fresh.slice(0, UNTRACKED_COUNTED)) {
+    try {
+      const file = path.join(cwd, rel);
+      if (fs.statSync(file).size > MAX_DIFF_FILE) continue;
+      const content = fs.readFileSync(file);
+      if (content.includes(0)) continue;
+      const text = content.toString('utf8');
+      stat.added += text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0;
+    } catch {}
+  }
+  return stat;
+}
+
+// Mudanças sem commit na pasta do projeto: o que os agentes "(raiz)" fizeram.
+async function rootStat(projectPath) {
+  if (!(await isRepo(projectPath))) return null;
+  return changeStat(projectPath, 'HEAD');
+}
+
+// Quanto a tarefa andou: commits à frente da base, arquivos mexidos ainda sem commit e linhas desde a base.
 async function taskInfo(projectPath, wt) {
   if (!wt.branch || wt.branch === '(detached)') return wt;
   const [base, description, status] = await Promise.all([
@@ -86,7 +123,9 @@ async function taskInfo(projectPath, wt) {
   ]);
   const ahead = base ? Number(await quiet(projectPath, ['rev-list', '--count', `${base}..${wt.branch}`, '--'])) || 0 : 0;
   const lastCommitAt = Number(await quiet(projectPath, ['log', '-1', '--format=%ct', wt.branch, '--'])) * 1000 || null;
-  return { ...wt, base, description, ahead, lastCommitAt, dirty: status ? status.split(/\r?\n/).length : 0 };
+  const mergeBase = base && /^[\w./-]+$/.test(base) && !base.startsWith('-') ? await quiet(wt.path, ['merge-base', base, 'HEAD']) : '';
+  const stat = mergeBase ? await changeStat(wt.path, mergeBase) : null;
+  return { ...wt, base, description, ahead, lastCommitAt, dirty: status ? status.split(/\r?\n/).length : 0, stat };
 }
 
 async function listWorktrees(projectPath) {
@@ -382,4 +421,4 @@ async function removeWorktree(projectPath, worktreePath) {
   await run(projectPath, ['worktree', 'remove', target]);
 }
 
-module.exports = { listWorktrees, branches, createWorktree, suggestSetup, diff, diffFile, conclude, concludeInfo, finishTask, removeWorktree };
+module.exports = { listWorktrees, rootStat, branches, createWorktree, suggestSetup, diff, diffFile, conclude, concludeInfo, finishTask, removeWorktree };

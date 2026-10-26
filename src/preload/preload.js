@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('deck', {
   },
   git: {
     worktrees: invoke('git:worktrees'),
+    rootStat: invoke('git:rootStat'),
     branches: invoke('git:branches'),
     createWorktree: invoke('git:createWorktree'),
     removeWorktree: invoke('git:removeWorktree'),
@@ -66,5 +67,6 @@ contextBridge.exposeInMainWorld('deck', {
   open: {
     vscode: invoke('open:vscode'),
     external: invoke('open:external'),
+    folder: invoke('open:folder'),
   },
 });

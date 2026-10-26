@@ -111,7 +111,7 @@ function codexRolloutById(dir, id) {
   return null;
 }
 
-// Turno sem task_complete e sem nada escrito há tanto tempo: foi interrompido (Esc não deixa marca no arquivo).
+// Turno sem task_complete nem turn_aborted e sem nada escrito há tanto tempo: foi interrompido de outro jeito.
 // O tempo vem do timestamp da última linha: o Windows não atualiza a data de um arquivo que segue aberto.
 const CODEX_STALE_MS = 5 * 60 * 1000;
 
@@ -135,25 +135,28 @@ function codexSaid(entry) {
   return null;
 }
 
-// Status e última fala, do fim do rollout: o último task_started/task_complete diz se está trabalhando.
+// Status, última fala e contexto, do fim do rollout: o último task_started/task_complete diz se está
+// trabalhando; o último token_count, quanto da janela a conversa ocupa.
 function codexState(file) {
   let fd;
   let status = null;
   let lastMessage = null;
+  let context = null;
+  const pending = () => !status || !lastMessage || !context;
   let lastAt = 0;
   try {
     fd = fs.openSync(file, 'r');
     const { size } = fs.fstatSync(fd);
     let pos = size;
     let carry = Buffer.alloc(0);
-    while (pos > 0 && size - pos < MAX_TAIL && (!status || !lastMessage)) {
+    while (pos > 0 && size - pos < MAX_TAIL && pending()) {
       const length = Math.min(CHUNK, pos);
       pos -= length;
       const buf = Buffer.alloc(length);
       fs.readSync(fd, buf, 0, length, pos);
       const lines = Buffer.concat([buf, carry]).toString('utf8').split('\n');
       carry = pos > 0 ? Buffer.from(lines.shift(), 'utf8') : Buffer.alloc(0);
-      for (let i = lines.length - 1; i >= 0 && (!status || !lastMessage); i -= 1) {
+      for (let i = lines.length - 1; i >= 0 && pending(); i -= 1) {
         const line = lines[i];
         if (!line.trim()) continue;
         if (!lastAt) lastAt = Date.parse(/"timestamp":"([^"]+)"/.exec(line.slice(0, 200))?.[1] || '') || 0;
@@ -166,16 +169,23 @@ function codexState(file) {
         }
         const type = entry.payload?.type;
         if (!status && type === 'task_started') status = Date.now() - lastAt > CODEX_STALE_MS ? 'idle' : 'busy';
-        if (!status && type === 'task_complete') status = 'idle';
+        if (!status && (type === 'task_complete' || type === 'turn_aborted')) status = 'idle';
+        const info = type === 'token_count' && entry.payload.info;
+        if (!context && info?.last_token_usage && info.model_context_window) {
+          context = { used: info.last_token_usage.total_tokens, window: info.model_context_window };
+        }
         const said = !lastMessage && codexSaid(entry);
         if (said) lastMessage = { kind: said.kind, text: said.text.trim().replace(/\s+/g, ' ').slice(0, said.kind === 'tool' ? 300 : 400) };
       }
     }
+    // Turno longo: as saídas de ferramenta empurram o task_started para além dos 4 MB lidos. Sem fim de
+    // turno nesse trecho (ele é a última linha de um turno), o turno segue aberto.
+    if (!status && pos > 0 && lastAt) status = Date.now() - lastAt > CODEX_STALE_MS ? 'idle' : 'busy';
   } catch {
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
-  return { status: status || 'idle', lastMessage, lastAt };
+  return { status: status || 'idle', lastMessage, context, lastAt };
 }
 
 // Relê o rollout quando ele cresce, e de tempos em tempos enquanto "trabalhando" (para notar turno interrompido).
@@ -192,9 +202,9 @@ function pollCodex(ptyId, entry) {
   const stale = entry.status === 'busy' && Date.now() - (entry.rolloutAt || 0) > CODEX_STALE_MS;
   if (size === entry.rolloutSize && !stale) return;
   entry.rolloutSize = size;
-  const { status, lastMessage, lastAt } = codexState(entry.rollout);
+  const { status, lastMessage, context, lastAt } = codexState(entry.rollout);
   entry.rolloutAt = lastAt;
-  update(ptyId, entry, entry.sessionId, status, null, lastMessage);
+  update(ptyId, entry, entry.sessionId, status, null, { lastMessage, context });
 }
 
 // Arquivo da conversa: <conta>/projects/<pasta>/<id>.jsonl (a pasta é o cwd com outra grafia; procura pelo id).
@@ -226,16 +236,18 @@ function toolSummary(block, cwd) {
 const MAX_TAIL = 4 * 1024 * 1024;
 const CHUNK = 256 * 1024;
 
-// Última coisa que o Claude disse (texto) ou pediu (ferramenta), do fim da conversa em disco.
-// O arquivo tem linhas enormes no meio (a requisição inteira), então lê de trás pra frente em
-// blocos, só até achar uma resposta do agente principal (não de subagente), e no máximo 4 MB.
-function claudeLastMessage(file, cwd) {
+// Última coisa que o Claude disse (texto) ou pediu (ferramenta), e o uso de tokens da última resposta,
+// do fim da conversa em disco. O arquivo tem linhas enormes no meio (a requisição inteira), então lê de
+// trás pra frente em blocos, só até achar respostas do agente principal (não de subagente), e no máximo 4 MB.
+function claudeTail(file, cwd) {
   let fd;
+  let message = null;
+  let usage = null;
   try {
     fd = fs.openSync(file, 'r');
     let pos = fs.fstatSync(fd).size;
     let carry = Buffer.alloc(0);
-    while (pos > 0 && carry.length < MAX_TAIL) {
+    while (pos > 0 && carry.length < MAX_TAIL && !(message && usage)) {
       const size = Math.min(CHUNK, pos);
       pos -= size;
       const buf = Buffer.alloc(size);
@@ -244,7 +256,7 @@ function claudeLastMessage(file, cwd) {
       const lines = data.toString('utf8').split('\n');
       // A primeira linha pode estar cortada: volta para o próximo bloco, a não ser no começo do arquivo.
       carry = pos > 0 ? Buffer.from(lines.shift(), 'utf8') : Buffer.alloc(0);
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
+      for (let i = lines.length - 1; i >= 0 && !(message && usage); i -= 1) {
         const line = lines[i];
         if (!line.includes('"type":"assistant"')) continue;
         let entry;
@@ -254,9 +266,11 @@ function claudeLastMessage(file, cwd) {
           continue;
         }
         if (entry.type !== 'assistant' || entry.isSidechain || !Array.isArray(entry.message?.content)) continue;
+        usage ??= entry.message.usage || null;
         for (const block of [...entry.message.content].reverse()) {
-          if (block.type === 'text' && block.text?.trim()) return { kind: 'text', text: block.text.trim().replace(/\s+/g, ' ').slice(0, 400) };
-          if (block.type === 'tool_use') return { kind: 'tool', text: toolSummary(block, cwd).replace(/\s+/g, ' ').slice(0, 300) };
+          if (message) break;
+          if (block.type === 'text' && block.text?.trim()) message = { kind: 'text', text: block.text.trim().replace(/\s+/g, ' ').slice(0, 400) };
+          if (block.type === 'tool_use') message = { kind: 'tool', text: toolSummary(block, cwd).replace(/\s+/g, ' ').slice(0, 300) };
         }
       }
     }
@@ -264,13 +278,20 @@ function claudeLastMessage(file, cwd) {
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
-  return null;
+  return { message, usage };
 }
 
-// Relê a última fala quando o agente para (parou ou pediu algo) e enquanto a conversa no disco
-// continuar mudando: a resposta pode chegar ao arquivo um instante depois do status.
-function refreshLastMessage(entry) {
-  if (!entry.sessionId || !['idle', 'waiting'].includes(entry.status)) return;
+// Janela do Claude: 1M com o modelo "[1m]" nas configurações da conta (a conversa em disco não diz),
+// ou quando a conversa já passou de 200k (trocou de modelo com /model); senão 200k.
+function claudeWindow(entry, used) {
+  entry.oneMillion ??= /\[1m\]/i.test(readJson(path.join(entry.dir, 'settings.json'))?.model || '');
+  return entry.oneMillion || used > 200000 ? 1000000 : 200000;
+}
+
+// Relê a conversa em disco quando ela muda: o contexto sempre; a última fala quando o agente para
+// (parou ou pediu algo), mesmo sem mudança no disco, já que a resposta pode ter chegado antes do status.
+function refreshTranscript(entry) {
+  if (!entry.sessionId) return;
   entry.transcript ??= claudeTranscript(entry.dir, entry.sessionId);
   if (!entry.transcript) return;
   let mtime;
@@ -280,22 +301,33 @@ function refreshLastMessage(entry) {
     entry.transcript = null;
     return;
   }
-  if (mtime === entry.transcriptMtime) return;
-  entry.transcriptMtime = mtime;
-  entry.lastMessage = claudeLastMessage(entry.transcript, entry.cwd);
+  const stopped = ['idle', 'waiting'].includes(entry.status);
+  const key = `${mtime}:${stopped}`;
+  if (key === entry.transcriptKey) return;
+  entry.transcriptKey = key;
+  const { message, usage } = claudeTail(entry.transcript, entry.cwd);
+  if (stopped) entry.lastMessage = message;
+  const used = usage && (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0)
+    + (usage.cache_read_input_tokens || 0) + (usage.output_tokens || 0);
+  entry.context = used ? { used, window: claudeWindow(entry, used) } : null;
 }
 
-// message: última fala já lida (Codex); o Claude relê a dele aqui.
-function update(ptyId, entry, sessionId, status, waitingFor = null, message = undefined) {
-  if (entry.sessionId !== sessionId) entry.transcript = null;
-  const before = JSON.stringify([entry.sessionId, entry.status, entry.waitingFor, entry.lastMessage]);
-  if (message !== undefined) entry.lastMessage = message;
+// read: última fala e contexto já lidos (Codex); o Claude relê os dele aqui.
+function update(ptyId, entry, sessionId, status, waitingFor = null, read = null) {
+  const snapshot = () => JSON.stringify([entry.sessionId, entry.status, entry.waitingFor, entry.lastMessage, entry.context]);
+  const before = snapshot();
+  if (entry.sessionId !== sessionId) {
+    // Outra conversa na aba (/clear, /resume): o contexto da anterior não vale mais.
+    entry.transcript = null;
+    entry.context = null;
+  }
+  if (read) Object.assign(entry, read);
   entry.sessionId = sessionId;
   entry.status = status;
   entry.waitingFor = waitingFor;
-  if (entry.kind === 'claude') refreshLastMessage(entry);
-  if (before === JSON.stringify([sessionId, status, waitingFor, entry.lastMessage])) return;
-  listener?.(ptyId, { sessionId, status, waitingFor, lastMessage: entry.lastMessage || null });
+  if (entry.kind === 'claude') refreshTranscript(entry);
+  if (before === snapshot()) return;
+  listener?.(ptyId, { sessionId, status, waitingFor, lastMessage: entry.lastMessage || null, context: entry.context || null });
 }
 
 function poll() {

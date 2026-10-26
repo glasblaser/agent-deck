@@ -123,6 +123,7 @@ function registerIpc() {
   handle('projects:setPinned', (id, pinned) => store.setProjectPinned(id, !!pinned));
 
   handle('git:worktrees', (projectPath) => git.listWorktrees(store.requireProjectPath(projectPath)));
+  handle('git:rootStat', (projectPath) => git.rootStat(store.requireProjectPath(projectPath)));
   handle('git:branches', (projectPath) => git.branches(store.requireProjectPath(projectPath)));
   // A lista do que copiar vem da configuração do projeto, nunca do renderer: ele só diz se quer preparar.
   handle('git:createWorktree', (projectPath, taskName, opts = {}) => {
@@ -181,6 +182,13 @@ function registerIpc() {
   handle('open:vscode', (dir) => {
     const target = store.requireAllowedPath(dir);
     require('node:child_process').spawn('code', [`"${target}"`], { shell: true, detached: true, stdio: 'ignore' }).unref();
+  });
+  // Pasta de projeto ou worktree no Explorer. Só pasta: o openPath num arquivo executaria o arquivo.
+  handle('open:folder', async (dir) => {
+    const target = store.requireAllowedPath(dir);
+    if (!require('node:fs').statSync(target).isDirectory()) throw new Error('Não é uma pasta.');
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
   });
   // Agente pedindo atenção com o app em segundo plano: notificação do Windows e a barra de tarefas
   // piscando até a janela ganhar foco. Clicar na notificação traz o app e abre a aba (tabId).

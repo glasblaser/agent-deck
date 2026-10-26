@@ -57,6 +57,9 @@ AGENT_DECK_SMOKE=/output/path npm start
 - Base and briefing live in git itself: `branch.<b>.deckbase` and `branch.<b>.description`.
 - **Sidebar**: `↑N` = commits ahead of base, `●N` = uncommitted files. Buttons on hover.
 - **± Diff**: everything the task changed since the base, committed or not, in Monaco's diff view.
+- **Live lines**: the card shows `+N −M · K files` (since the base, including uncommitted work and new files; on "(root)"
+  cards, what is uncommitted in the project folder). Re-read every 6 s while one of the task's agents is working;
+  the number lights up when it changes.
 - **Ready-to-use worktree** (⚙ on the project): files to copy into each new worktree (what git ignores, e.g.
   `.env`, `appsettings.Development.json`) and a command typed in the task's terminal before the agent
   (`npm ci`, `dotnet restore`…). The first time it's pre-filled with a suggestion (ignored files at the
@@ -92,7 +95,7 @@ Each card shows the briefing, each agent with its state and for how long ("worki
 agent's **last message**, read from the end of the conversation on disk: text, or the tool it is asking
 for while waiting ("Asked: Write: src/a.js"). Agents running in the project folder itself show up as the
 project's "(root)" task. For Codex, state and last message come from its rollout file (`task_started` /
-`task_complete`); it has no "waiting for you", and a turn interrupted with Esc reads as idle after 5 minutes.
+`task_complete`); it has no "waiting for you", a turn interrupted with Esc (`turn_aborted`) reads as idle at once, and a turn with nothing written for 5 minutes too.
 
 ### Day to day
 
@@ -103,6 +106,8 @@ project's "(root)" task. For Codex, state and last message come from its rollout
   ones created later (except `_name`, `.name` and `*.worktrees`); "One folder" adds a loose one. The bar shows
   "In use" (open tab, task, queued card, conversation from the last 3 days, or pinned with ☆) and folds the rest
   into "Others", with a filter at the top. On first start, a folder holding two or more registered projects becomes a root.
+- **Folder in Explorer**: Ctrl+Shift+E (or 📂 in the tab bar) opens the current tab's task folder — the worktree, or
+  the project folder; on the board, the one of the agent most in need of attention. Also 📂 on each card, in the pane header and in the palette.
 - **Command palette**: Ctrl+Shift+P anywhere, or Ctrl+K outside the terminal and editor (in the agent's prompt
   Ctrl+K deletes to end of line). Fuzzy search over tabs, tasks (plus diff/finish), the to-do queue, per-project actions and layout.
 - **Account colors**: each account has a color (automatic, or pick it on the account card). It shows as the stripe
@@ -119,6 +124,10 @@ project's "(root)" task. For Codex, state and last message come from its rollout
   lists the last few days' ones; × removes one from the list for good (it stays in Claude's history).
 - **Tab dot** = agent state: hollow idle, pulsing yellow working, pulsing red waiting for you, green done.
   Other tabs show an icon (`>_` terminal, ✎ editor, ± diff, ▦ board); Codex tabs carry a "GPT" tag.
+- **Context**: how much of the window the conversation fills, from the last response on disk (Claude: the transcript's
+  `usage`, 1M window with a `[1m]` model in the account settings or above 200k; Codex: the rollout's `token_count`).
+  A small bar on each agent in the card, in the pane header and, from 70% up, a tag on the tab (yellow; red from 90%).
+  Crossing 90% raises a Windows notification while the app is in the background.
 - **Between agents**: right-click a terminal → "Send selection/clipboard to" another agent tab. Pastes into
   the prompt (bracketed paste), no Enter. In Claude, select with Shift+drag.
   Claude tabs on the **same account** can also talk natively (Claude Code's `ListAgents`/`SendMessage`).

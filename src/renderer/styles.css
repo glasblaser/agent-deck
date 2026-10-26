@@ -151,6 +151,8 @@ main { display: grid; grid-template-rows: 34px minmax(0, 1fr); grid-template-col
 .frame-head .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .frame-head .close { background: none; border: none; color: var(--muted); padding: 0 4px; }
 .frame-head .close:hover { color: var(--danger); }
+.frame-head .folder { background: none; border: none; padding: 0 4px; font-size: 11px; opacity: .6; }
+.frame-head .folder:hover { opacity: 1; }
 .frame.exited .frame-head .label { text-decoration: line-through; }
 .pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; }
 .slot-empty { display: grid; place-content: center; color: var(--muted); background: var(--bg); cursor: pointer; outline: 1px solid transparent; outline-offset: -1px; }
@@ -230,6 +232,14 @@ body.sidebar-hidden #sidebar { display: none; }
 /* tarefas: commits à frente da base, arquivos sem commit, diff e briefing */
 .badge { flex: none; font-size: 10px; font-family: "Cascadia Mono", Consolas, monospace; color: var(--shell); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 .badge.dirty { color: var(--accent); }
+.badge.lines { color: var(--muted); font-variant-numeric: tabular-nums; }
+.badge.lines .add { color: var(--shell); }
+.badge.lines .del { color: var(--danger); }
+.badge.lines.bump { animation: bump 1.4s ease-out both; }
+@keyframes bump {
+  0% { background: color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); transform: scale(1.08); }
+  100% { background: transparent; border-color: var(--line); transform: scale(1); }
+}
 .dot.diff { background: var(--accent); }
 .st { display: inline-block; width: 12px; font-family: "Cascadia Mono", Consolas, monospace; font-weight: 600; }
 .st-a, .st-u { color: var(--shell); }
@@ -279,6 +289,15 @@ dialog { width: 480px; }
 .card .agent.st-waiting .state { color: var(--danger); font-weight: 600; }
 .card .agent.st-done .state { color: var(--accent); font-weight: 600; }
 .card .agent.st-busy .state { color: var(--accent); }
+/* contexto da conversa: barrinha no card, etiqueta na aba (só de 70% pra cima) */
+.card .agent .ctx { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.card .agent .ctx .bar { width: 36px; height: 4px; margin: 0; }
+.card .agent .ctx .fill { transition: width .6s ease; }
+.card .agent .ctx.warm { color: var(--accent); }
+.card .agent .ctx.hot { color: var(--danger); font-weight: 600; }
+.ctx-tag { flex: none; font-size: 9px; padding: 0 3px; border-radius: 3px; font-variant-numeric: tabular-nums; }
+.ctx-tag.warm { color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.ctx-tag.hot { color: var(--danger); background: color-mix(in srgb, var(--danger) 22%, transparent); font-weight: 600; }
 .card footer { display: flex; align-items: center; gap: 5px; }
 .card footer button { font-size: 11px; padding: 0 6px; }
 

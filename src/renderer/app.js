@@ -1,7 +1,7 @@
 // UI do Agent Deck: sidebar (projetos/worktrees, contas/uso) e abas (terminal, editor, navegador).
 import { Terminal } from '/xterm/lib/xterm.mjs';
 import { FitAddon } from '/xterm-fit/lib/addon-fit.mjs';
-import { renderBoard, mainAgent, isDragging } from './views.js';
+import { renderBoard, mainAgent, isDragging, contextInfo } from './views.js';
 import { openPalette } from './palette.js';
 
 const deck = window.deck;
@@ -130,6 +130,7 @@ function addTab(tab, slot) {
       tab.headDot,
       tab.headLabel,
       tab.headStatus,
+      tab.cwd ? h('button', { class: 'folder', title: 'Abrir a pasta no Explorer (Ctrl+Shift+E)', onclick: () => openFolder(workFolder(tab.cwd)) }, '📂') : null,
       tab.pinned ? null : h('button', { class: 'close', title: 'Fechar', onclick: () => closeTab(tab) }, '×')),
     tab.pane);
   $('#panes').append(tab.frame);
@@ -299,11 +300,21 @@ function tabMark(tab) {
   return h('span', { class: `dot state-${st}`, title: MARK_TEXT[st] || 'encerrado' });
 }
 
+// Na aba, o contexto só aparece quando começa a importar (70%+): a barra de abas já é apertada.
+function tabContext(tab) {
+  const info = contextInfo(tab.context);
+  return info?.level ? h('span', { class: `ctx-tag ${info.level}`, title: info.title }, `${info.pct}%`) : null;
+}
+const contextText = (tab) => {
+  const info = contextInfo(tab.context);
+  return info ? `contexto ${info.pct}%` : '';
+};
+
 function renderTabs() {
   $('#tabs').replaceChildren(...tabs.map((tab) =>
     h('div', {
       class: `tab ${tab === activeTab ? 'active' : ''} ${slots.includes(tab) ? 'visible' : ''} ${tab.exited ? 'exited' : ''} ${tab.attention ? 'attention' : ''} ${tab.status === 'waiting' ? 'waiting' : ''}`,
-      title: [tab.title, tabProfile(tab) && `conta ${tabProfile(tab).name}`, tab.tooltip, stateText(tab)].filter(Boolean).join('\n'),
+      title: [tab.title, tabProfile(tab) && `conta ${tabProfile(tab).name}`, tab.tooltip, stateText(tab), contextInfo(tab.context)?.title].filter(Boolean).join('\n'),
       'data-status': tab.status || null,
       'data-session': tab.sessionId || null,
       'data-account': tabProfile(tab)?.name || null,
@@ -315,6 +326,7 @@ function renderTabs() {
     tabMark(tab),
     h('span', { class: 'label' }, tab.shortTitle || tab.title),
     tab.kindClass === 'codex' ? h('span', { class: 'kind-tag', title: 'Codex (GPT)' }, 'GPT') : null,
+    tabContext(tab),
     tab.pinned ? null : h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
   for (const tab of tabs) {
     tab.headLabel.textContent = tab.title;
@@ -322,7 +334,7 @@ function renderTabs() {
     tab.headDot.replaceWith(tab.headDot = tabMark(tab));
     const account = tabProfile(tab);
     tab.frame.style.setProperty('--account', account ? profileColor(account) : 'transparent');
-    tab.headStatus.textContent = stateText(tab);
+    tab.headStatus.textContent = [stateText(tab), contextText(tab)].filter(Boolean).join(' · ');
     tab.headStatus.classList.toggle('attention', !!tab.attention);
     tab.headStatus.classList.toggle('waiting', tab.status === 'waiting');
     tab.frame.classList.toggle('exited', !!tab.exited);
@@ -566,6 +578,12 @@ deck.pty.onStatus((id, info) => {
   if (info.status === 'waiting' && tab.status !== 'waiting') {
     notify(tab, `${tab.title} está esperando você`, `Pediu: ${info.waitingFor || 'uma resposta'}.`);
   }
+  // Contexto passando de 90%: hora de fechar a conversa (ou compactar) antes que a CLI faça isso sozinha.
+  const pct = contextInfo(info.context)?.pct || 0;
+  if (pct >= 90 && (contextInfo(tab.context)?.pct || 0) < 90) {
+    notify(tab, `${tab.title}: contexto em ${pct}%`, 'A conversa está quase no limite da janela.');
+  }
+  tab.context = info.context || null;
   const previous = tab.status;
   tab.waitingFor = info.waitingFor || null;
   tab.lastMessage = info.lastMessage || null;
@@ -575,8 +593,9 @@ deck.pty.onStatus((id, info) => {
   if (tab.briefing && info.status === 'idle') deliverBriefing(tab);
   // Parou (terminou ou pediu algo): é quando commits e arquivos mudam; atualiza os contadores da tarefa.
   if (['idle', 'waiting'].includes(info.status) && previous === 'busy') {
-    const project = state.projects.find((p) => (worktreesByProject.get(p.id) || []).some((w) => isInside(tab.cwd, w.path)));
-    if (project) loadWorktrees(project).then(renderProjects);
+    const project = tab.cwd && state.projects.find((p) => isInside(tab.cwd, p.path)
+      || (worktreesByProject.get(p.id) || []).some((w) => isInside(tab.cwd, w.path)));
+    if (project) refreshChanges(project, [tab]);
   }
   renderTabs();
   if (sessionChanged) saveSession();
@@ -881,6 +900,63 @@ async function loadWorktrees(project) {
   worktreesByProject.set(project.id, res?.worktrees || []);
 }
 
+// Pasta em que se trabalha a partir de um caminho qualquer dentro dela: a worktree da tarefa, ou a pasta
+// do projeto (não a subpasta onde o terminal está). Fora dos projetos, o próprio caminho.
+function workFolder(dir) {
+  for (const project of state.projects) {
+    const wt = (worktreesByProject.get(project.id) || []).find((w) => isInside(dir, w.path));
+    if (wt) return wt.path;
+  }
+  return state.projects.find((p) => isInside(dir, p.path))?.path || dir;
+}
+const openFolder = (dir) => attempt(() => deck.open.folder(dir));
+
+// Pasta da aba em que você está; no quadro, a da tarefa do agente que mais pede atenção.
+function openCurrentFolder() {
+  const dir = activeTab?.cwd || mainAgent({ agents: taskModel().flatMap((t) => t.agents) })?.tab.cwd;
+  if (dir) openFolder(workFolder(dir));
+  else toast('Nenhuma aba com pasta aberta.', 'info');
+}
+
+// Linhas mudadas, ao vivo: relê o git das tarefas dos agentes dados (worktree: contadores e +/− desde a base;
+// pasta do projeto: o que não foi commitado). Uma leitura por projeto de cada vez.
+const rootStatByProject = new Map();
+const changesLoading = new Set();
+async function refreshChanges(project, agentTabs) {
+  if (changesLoading.has(project.id)) return;
+  changesLoading.add(project.id);
+  const worktrees = worktreesByProject.get(project.id) || [];
+  const inWorktree = (t) => worktrees.some((w) => isInside(t.cwd, w.path));
+  // A barra de projetos mostra os contadores das worktrees: só redesenha quando eles foram relidos.
+  const sidebar = agentTabs.some(inWorktree);
+  try {
+    const jobs = [];
+    if (sidebar) jobs.push(loadWorktrees(project));
+    if (agentTabs.some((t) => !inWorktree(t))) {
+      jobs.push(deck.git.rootStat(project.path).then((stat) => rootStatByProject.set(project.id, stat), () => {}));
+    }
+    await Promise.all(jobs);
+  } finally {
+    changesLoading.delete(project.id);
+  }
+  if (sidebar) renderProjects();
+  refreshViews();
+}
+
+// Enquanto um agente trabalha, os números do card andam junto; parado, basta a leitura de quando ele parou
+// (e a primeira de uma pasta de projeto com agente, que ainda não tem número).
+const CHANGES_MS = 6000;
+setInterval(() => {
+  if (document.hidden) return;
+  for (const project of state.projects) {
+    const worktrees = worktreesByProject.get(project.id) || [];
+    const agentTabs = tabs.filter((t) => t.isAgent && t.cwd && (isInside(t.cwd, project.path) || worktrees.some((w) => isInside(t.cwd, w.path))));
+    const due = agentTabs.filter((t) => t.status === 'busy'
+      || (!rootStatByProject.has(project.id) && !worktrees.some((w) => isInside(t.cwd, w.path))));
+    if (due.length) refreshChanges(project, due);
+  }
+}, CHANGES_MS);
+
 function defaultProfile(kind) {
   return state.profiles.find((p) => p.kind === kind && p.isDefault) || state.profiles.find((p) => p.kind === kind);
 }
@@ -1015,7 +1091,7 @@ function taskModel() {
   const agentsIn = (match) => tabs.filter((t) => t.isAgent && t.cwd && match(t.cwd))
     .map((tab) => {
       const account = tabProfile(tab);
-      return { tab, state: agentState(tab), since: tab.statusSince || null, lastMessage: tab.lastMessage || null,
+      return { tab, state: agentState(tab), since: tab.statusSince || null, lastMessage: tab.lastMessage || null, context: tab.context || null,
         account: account && { name: account.name, color: profileColor(account) } };
     });
   const columnOf = (agents, changed) => {
@@ -1029,14 +1105,14 @@ function taskModel() {
     const rootAgents = agentsIn((cwd) => isInside(cwd, project.path) && !worktrees.some((w) => isInside(cwd, w.path)));
     if (rootAgents.length) {
       list.push({ id: project.path, name: `${project.name} (raiz)`, project, wt: null, briefing: '', agents: rootAgents,
-        column: columnOf(rootAgents, false), ahead: 0, dirty: 0, managed: false });
+        column: columnOf(rootAgents, false), ahead: 0, dirty: 0, managed: false, stat: rootStatByProject.get(project.id) || null });
     }
     for (const wt of worktrees) {
       const agents = agentsIn((cwd) => isInside(cwd, wt.path));
       list.push({
         id: wt.path, name: (wt.branch || basename(wt.path)).replace(/^task\//, ''), project, wt,
         briefing: wt.description || '', agents, column: columnOf(agents, wt.ahead || wt.dirty),
-        ahead: wt.ahead || 0, dirty: wt.dirty || 0, managed: !!wt.managed, lastCommitAt: wt.lastCommitAt || null,
+        ahead: wt.ahead || 0, dirty: wt.dirty || 0, managed: !!wt.managed, lastCommitAt: wt.lastCommitAt || null, stat: wt.stat || null,
       });
     }
   }
@@ -1047,6 +1123,7 @@ const taskActions = {
   focus: (tab) => tabs.includes(tab) && activate(tab),
   openAgent: (task) => newTabDialog({ cwd: task.wt?.path || task.project.path, type: 'claude' }),
   diff: (task) => openDiff(task.project.path, task.wt.path),
+  folder: (task) => openFolder(task.wt?.path || task.project.path),
   conclude: (task) => concludeTask(task.project, task.wt),
   newTask: () => newTaskAnywhere(),
   addTodo: () => editTodo(),
@@ -1663,6 +1740,7 @@ $('#refresh-usage').addEventListener('click', () => refreshUsage(true));
 $('#new-tab').addEventListener('click', () => newTabDialog());
 $('#open-board').addEventListener('click', () => openBoard());
 $('#open-palette').addEventListener('click', () => showPalette());
+$('#open-folder').addEventListener('click', () => openCurrentFolder());
 // Roda do mouse rola a barra de abas na horizontal.
 $('#tabs').addEventListener('wheel', (e) => {
   if (!e.deltaY || e.shiftKey) return;
@@ -1695,11 +1773,13 @@ function paletteCommands() {
   add('Comando', 'Adicionar à fila (A fazer)', () => editTodo());
   add('Comando', 'Quadro', () => openBoard(), 'Ctrl+Shift+Q');
   add('Comando', 'Nova aba', () => newTabDialog(), 'Ctrl+T');
+  if (activeTab?.cwd) add('Comando', 'Abrir a pasta desta aba no Explorer', () => openFolder(workFolder(activeTab.cwd)), 'Ctrl+Shift+E');
   for (const project of state.projects) {
     add('Projeto', `Claude em ${project.name}`, () => newTabDialog({ cwd: project.path, type: 'claude' }));
     add('Projeto', `Codex em ${project.name}`, () => newTabDialog({ cwd: project.path, type: 'codex' }));
     add('Projeto', `Terminal em ${project.name}`, () => openTerminal({ cwd: project.path }));
     add('Projeto', `Editor em ${project.name}`, () => openEditor(project.path));
+    add('Projeto', `Pasta de ${project.name} no Explorer`, () => openFolder(project.path));
     if (project.isRepo) add('Projeto', `Nova tarefa em ${project.name}`, () => newTask(project));
   }
   for (const n of [1, 2, 4]) add('Layout', `${n === 1 ? 'Um painel' : n === 2 ? 'Dois lado a lado' : 'Quatro (2×2)'}`, () => setLayout(n), `Ctrl+Shift+${n}`);
@@ -1736,6 +1816,9 @@ document.addEventListener('keydown', (e) => {
     const last = recentClosed()[0];
     if (last) reopenConversation(last);
     else toast('Nenhuma conversa fechada recente para reabrir.', 'info');
+  } else if (e.code === 'KeyE' && e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    openCurrentFolder();
   } else if (e.code === 'KeyQ' && e.shiftKey && !e.altKey) {
     e.preventDefault();
     openBoard();

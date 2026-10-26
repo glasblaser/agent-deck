@@ -65,6 +65,42 @@ export function ago(ms) {
   return hours < 24 ? `há ${hours} h` : `há ${Math.floor(hours / 24)} d`;
 }
 
+// Quanto da janela de contexto a conversa ocupa: % e faixa (quente a partir de 70%, crítica a partir de 90%).
+const kTokens = (n) => (n >= 1000000 ? `${(n / 1000000).toFixed(n % 1000000 ? 1 : 0)}M` : `${Math.round(n / 1000)}k`);
+export function contextInfo(context) {
+  if (!context?.used || !context.window) return null;
+  const pct = Math.min(100, Math.round((context.used / context.window) * 100));
+  return { pct, level: pct >= 90 ? 'hot' : pct >= 70 ? 'warm' : '', title: `contexto: ${kTokens(context.used)} de ${kTokens(context.window)} tokens` };
+}
+
+function contextMeter(context, h) {
+  const info = contextInfo(context);
+  if (!info) return null;
+  return h('span', { class: `ctx ${info.level}`, title: info.title },
+    h('span', { class: 'bar' }, h('span', { class: `fill ${info.level}`, style: `width: ${info.pct}%` })), `${info.pct}%`);
+}
+
+// Linhas mudadas na tarefa. Quando o número muda, ele acende por um instante; o quadro é redesenhado
+// a toda hora, então a animação continua de onde estava (delay negativo) em vez de recomeçar ou sumir.
+const BUMP_MS = 1400;
+const lastStats = new Map(); // task.id -> { key, at }
+function changeBadge(task, h) {
+  const stat = task.stat;
+  if (!stat?.files) return null;
+  const key = `${stat.files}:${stat.added}:${stat.removed}`;
+  const seen = lastStats.get(task.id);
+  if (!seen || seen.key !== key) lastStats.set(task.id, { key, at: seen ? Date.now() : 0 });
+  const elapsed = Date.now() - lastStats.get(task.id).at;
+  const bump = elapsed < BUMP_MS;
+  const what = task.wt ? 'desde a base, com o que ainda não foi commitado' : 'sem commit na pasta do projeto';
+  return h('span', {
+    class: `badge lines ${bump ? 'bump' : ''}`,
+    style: bump ? `animation-delay: -${elapsed}ms` : null,
+    title: `${stat.files} ${stat.files === 1 ? 'arquivo' : 'arquivos'}, +${stat.added} −${stat.removed} linhas ${what}`,
+  }, h('span', { class: 'add' }, `+${stat.added}`), ' ', h('span', { class: 'del' }, `−${stat.removed}`),
+  h('span', { class: 'muted' }, ` · ${stat.files} arq`));
+}
+
 // Agente que mais merece sua atenção numa tarefa: o que espera você, depois o que terminou sem ser visto.
 export function mainAgent(task) {
   const rank = { waiting: 0, done: 1, busy: 2, idle: 3 };
@@ -92,16 +128,19 @@ function card(task, actions, h) {
     }, h('span', { class: `dot ${a.tab.kindClass} ${a.state === 'busy' || a.state === 'waiting' ? 'busy' : ''}` }),
     a.account ? h('span', { class: 'account-tag', style: `--account: ${a.account.color}`, title: `Conta: ${a.account.name}` }, a.account.name) : null,
     h('span', { class: 'who' }, a.tab.kindClass === 'codex' ? 'Codex' : 'Claude'),
+    contextMeter(a.context, h),
     h('span', { class: 'state', title: a.since ? new Date(a.since).toLocaleString('pt-BR') : '' },
       [STATE_TEXT[a.state] || 'parado', ago(a.since)].filter(Boolean).join(' · ')))))
     : h('p', { class: 'muted small' }, 'Nenhum agente aberto.'),
   said ? h('blockquote', { class: `said ${said.kind}`, title: said.text },
     said.kind === 'tool' ? (agent.state === 'waiting' ? 'Pediu: ' : 'Última ação: ') : '', said.text) : null,
   h('footer', {},
+    changeBadge(task, h),
     task.ahead ? h('span', { class: 'badge', title: 'commits à frente da base' }, `↑${task.ahead}`) : null,
     task.dirty ? h('span', { class: 'badge dirty', title: 'arquivos sem commit' }, `●${task.dirty}`) : null,
     !task.agents.length && task.lastCommitAt ? h('span', { class: 'muted small' }, `commit ${ago(task.lastCommitAt)}`) : null,
     h('span', { class: 'spacer' }),
+    h('button', { title: 'Abrir a pasta no Explorer', onclick: (e) => { e.stopPropagation(); actions.folder(task); } }, '📂'),
     task.agents.length ? null : h('button', { title: 'Abrir Claude nessa tarefa', onclick: (e) => { e.stopPropagation(); actions.openAgent(task); } }, 'Abrir Claude'),
     // Agente direto na pasta do projeto: não há worktree para concluir; o fim é fechar os agentes.
     !task.wt && task.agents.length ? h('button', { title: 'Fechar os agentes dessa pasta (o trabalho já está nos arquivos)', onclick: (e) => { e.stopPropagation(); actions.endRoot(task); } }, '■ Encerrar') : null,

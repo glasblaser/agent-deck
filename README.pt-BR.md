@@ -52,6 +52,9 @@ AGENT_DECK_SMOKE=/caminho/saida npm start
 - Base e briefing ficam no próprio git: `branch.<b>.deckbase` e `branch.<b>.description`.
 - **Sidebar**: `↑N` = commits à frente da base, `●N` = arquivos sem commit. Botões no hover.
 - **± Diff**: tudo que a tarefa mudou desde a base, commitado ou não, no diff do Monaco.
+- **Linhas ao vivo**: o card mostra `+N −M · K arq` (desde a base, com o que não foi commitado e arquivos novos; nos cards
+  "(raiz)", o que está sem commit na pasta do projeto). Relido a cada 6 s enquanto um agente da tarefa trabalha;
+  o número acende quando muda.
 - **Worktree que nasce pronta** (⚙ no projeto): arquivos para copiar em cada worktree nova (o que o git ignora,
   ex.: `.env`, `appsettings.Development.json`) e um comando digitado no terminal da tarefa antes do agente
   (`npm ci`, `dotnet restore`…). Na primeira vez vem com sugestão (ignorados na raiz do projeto, comando pelo
@@ -87,7 +90,7 @@ Cada card mostra o briefing, cada agente com estado e há quanto tempo ("trabalh
 **última fala** do agente, lida do fim da conversa em disco: texto, ou a ferramenta que ele está pedindo
 enquanto espera ("Pediu: Write: src/a.js"). Agentes rodando na própria pasta do projeto aparecem como a
 tarefa "(raiz)" dele. No Codex, estado e última fala vêm do arquivo de rollout (`task_started` /
-`task_complete`); ele não tem "esperando você", e um turno interrompido com Esc vira "parado" depois de 5 minutos.
+`task_complete`); ele não tem "esperando você", um turno interrompido com Esc (`turn_aborted`) vira "parado" na hora, e um turno sem nada escrito há 5 minutos também.
 
 ### No dia a dia
 
@@ -98,6 +101,8 @@ tarefa "(raiz)" dele. No Codex, estado e última fala vêm do arquivo de rollout
   depois (menos `_nome`, `.nome` e `*.worktrees`); "Uma pasta só" adiciona uma avulsa. A barra mostra "Em uso"
   (aba aberta, tarefa, card na fila, conversa dos últimos 3 dias ou fixado com ☆) e recolhe o resto em "Outros",
   com filtro no topo. Na primeira abertura, a pasta que já tem dois ou mais projetos cadastrados vira raiz.
+- **Pasta no Explorer**: Ctrl+Shift+E (ou 📂 na barra de abas) abre a pasta da tarefa da aba atual — a worktree, ou a
+  pasta do projeto; no quadro, a do agente que mais pede atenção. Também 📂 em cada card, no cabeçalho do painel e na paleta.
 - **Paleta de comandos**: Ctrl+Shift+P de qualquer lugar, ou Ctrl+K fora do terminal e do editor (no prompt do
   agente o Ctrl+K apaga até o fim da linha). Busca aproximada em abas, tarefas (e diff/concluir), fila "A fazer",
   ações por projeto e layout.
@@ -115,6 +120,10 @@ tarefa "(raiz)" dele. No Codex, estado e última fala vêm do arquivo de rollout
   lista as dos últimos dias; o × tira uma da lista de vez (ela continua no histórico do Claude).
 - **Bolinha da aba** = estado do agente: vazada parado, amarela pulsando trabalhando, vermelha pulsando esperando
   você, verde terminou. Outras abas mostram um ícone (`>_` terminal, ✎ editor, ± diff, ▦ quadro); a do Codex tem a etiqueta "GPT".
+- **Contexto**: quanto da janela a conversa ocupa, da última resposta em disco (Claude: `usage` da conversa, janela de
+  1M com modelo `[1m]` na conta ou acima de 200k; Codex: `token_count` do rollout). Barrinha em cada agente do card,
+  no cabeçalho do painel e, de 70% pra cima, etiqueta na aba (amarela; vermelha a partir de 90%). Ao passar de 90%,
+  notificação do Windows com o app em segundo plano.
 - **Entre agentes**: botão direito num terminal → "Enviar seleção/área de transferência para" outra aba de
   agente. Cola no prompt (bracketed paste), sem Enter. No Claude, selecione com Shift+arrastar.
   Abas de Claude da **mesma conta** também conversam nativamente (`ListAgents`/`SendMessage` do Claude Code).
