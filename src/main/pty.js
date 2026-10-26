@@ -14,9 +14,19 @@ const alive = new Set();
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Primeira mensagem do Codex como argumento (ele não publica quando chega no prompt, então não dá para
+// colar depois): vira um literal entre aspas simples do PowerShell, onde nada é interpretado. Aspas são
+// dobradas (o PowerShell trata as tipográficas como aspas também), quebras de linha viram espaço (a linha
+// é digitada no shell) e um "-" no começo sairia como opção do codex.
+function quotedPrompt(text) {
+  const flat = String(text).replace(/[\r\n\t]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '').trim().replace(/^-+/, '').slice(0, 8000);
+  return flat ? `'${flat.replace(/['‘’‚‛]/g, "''")}'` : '';
+}
+
 // O renderer só escolhe o agente e, para reabrir, um id de sessão; nunca manda comando livre.
-// O id é gerado aqui (Claude) ou validado como UUID antes de entrar no comando.
-function agentCommand(agent, profile, resumeId) {
+// O id é gerado aqui (Claude) ou validado como UUID antes de entrar no comando; a primeira mensagem
+// do Codex entra só como literal (quotedPrompt).
+function agentCommand(agent, profile, resumeId, prompt) {
   if (resumeId && !UUID.test(resumeId)) throw new Error('Id de sessão inválido.');
   if (agent === 'claude') {
     // Sem conversa em disco (nenhuma mensagem enviada) não há o que retomar: abre uma nova.
@@ -26,7 +36,8 @@ function agentCommand(agent, profile, resumeId) {
     const sessionId = crypto.randomUUID();
     return { command: `claude --session-id ${sessionId}`, sessionId };
   }
-  if (agent === 'codex') return { command: resumeId ? `codex resume ${resumeId}` : 'codex', sessionId: resumeId || null };
+  if (agent === 'codex' && resumeId) return { command: `codex resume ${resumeId}`, sessionId: resumeId };
+  if (agent === 'codex') return { command: ['codex', prompt && quotedPrompt(prompt)].filter(Boolean).join(' '), sessionId: null };
   if (agent === 'codex-login') return { command: 'codex login', sessionId: null };
   throw new Error('Agente desconhecido.');
 }
@@ -106,8 +117,8 @@ agents.onChange((id, info) => emit('agent:status', id, info));
 
 // setupCommand: preparo da worktree (configurado no projeto), digitado antes do agente na mesma linha.
 // "; " e não "&&": o PowerShell 5 não tem &&, e o agente sobe mesmo se o preparo falhar (o erro fica à vista).
-function spawn({ cwd, profile, agent, resumeId, setupCommand, cols = 120, rows = 30 }) {
-  const launch = agent ? agentCommand(agent, profile, resumeId) : null;
+function spawn({ cwd, profile, agent, resumeId, prompt, setupCommand, cols = 120, rows = 30 }) {
+  const launch = agent ? agentCommand(agent, profile, resumeId, prompt) : null;
   const line = [setupCommand, launch?.command].filter(Boolean).join('; ');
   const id = nextId++;
   ensureHost().send({

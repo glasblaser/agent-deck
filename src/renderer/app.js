@@ -357,7 +357,8 @@ const AGENTS = {
   'codex-login': { label: 'Login Codex', kind: 'codex' },
 };
 
-// briefing: primeira mensagem para o Claude, enviada quando ele chega no prompt (ver deliverBriefing).
+// briefing: primeira mensagem do agente. Claude: enviada quando ele chega no prompt (ver deliverBriefing);
+// Codex: argumento do comando.
 function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing, prepare }) {
   const pane = h('div', { class: 'terminal' });
   const term = new Terminal({
@@ -443,7 +444,9 @@ function openTerminal({ cwd, profileId, agent, resumeId, slot, briefing, prepare
     if (tab.ptyId) deck.pty.resize(tab.ptyId, cols, rows);
   });
 
-  attempt(() => deck.pty.spawn({ cwd, profileId, agent, resumeId, prepare: !!prepare, cols: term.cols, rows: term.rows })).then((res) => {
+  // Codex: o briefing vai na linha de comando (o main põe entre aspas); ver deliverBriefing para o Claude.
+  const prompt = agent === 'codex' && !resumeId ? briefing || null : null;
+  attempt(() => deck.pty.spawn({ cwd, profileId, agent, resumeId, prompt, prepare: !!prepare, cols: term.cols, rows: term.rows })).then((res) => {
     if (!res) {
       term.write('\r\n\x1b[31mNão foi possível abrir o terminal.\x1b[0m\r\n');
       return;
@@ -1124,6 +1127,8 @@ const taskActions = {
   openAgent: (task) => newTabDialog({ cwd: task.wt?.path || task.project.path, type: 'claude' }),
   diff: (task) => openDiff(task.project.path, task.wt.path),
   folder: (task) => openFolder(task.wt?.path || task.project.path),
+  review: (task) => reviewTask(task),
+  reviewer: (task) => (reviewable(task) ? (reviewerFor(task) === 'codex' ? 'GPT' : 'Claude') : null),
   conclude: (task) => concludeTask(task.project, task.wt),
   newTask: () => newTaskAnywhere(),
   addTodo: () => editTodo(),
@@ -1415,8 +1420,8 @@ async function newTask(project, preset = {}) {
   renderProjects();
   const agent = values.agent || null;
   openTerminal({ cwd: created.path, agent, profileId: agent ? values.profile : null, briefing: values.briefing, prepare });
-  // O Codex não publica quando chega no prompt: o briefing vai pela área de transferência.
-  if (values.briefing && agent !== 'claude') {
+  // Claude e Codex recebem o briefing como primeira mensagem; num terminal sem agente, vai pela área de transferência.
+  if (values.briefing && !agent) {
     navigator.clipboard.writeText(values.briefing);
     toast('Briefing copiado: cole com Ctrl+V quando o agente abrir.', 'info');
   }
@@ -1542,6 +1547,32 @@ function resolveWithAgent(project, wt, base) {
   }
   openTerminal({ cwd: wt.path, agent: 'claude', profileId: defaultProfile('claude')?.id, briefing: ask });
 }
+
+// Revisão cruzada: o outro modelo revisa o que a tarefa mudou (GPT revisa Claude e vice-versa), na mesma
+// pasta, sem mexer em nada. O pedido diz onde está o objetivo e como ver o diff; o resto é com o revisor.
+function reviewerFor(task) {
+  const kinds = new Set(task.agents.map((a) => a.tab.kindClass));
+  const kind = kinds.has('codex') && !kinds.has('claude') ? 'claude' : 'codex';
+  return defaultProfile(kind) ? kind : 'claude';
+}
+
+function reviewTask(task) {
+  const kind = reviewerFor(task);
+  const author = [...new Set(task.agents.map((a) => (a.tab.kindClass === 'codex' ? 'Codex (GPT)' : 'Claude')))].join(' e ') || 'outro agente';
+  const changes = task.wt?.base
+    ? `Veja tudo o que mudou desde a base ${task.wt.base}: git diff ${task.wt.base}...HEAD (commits) e git status / git diff (o que ainda não foi commitado, inclusive arquivos novos).`
+    : 'Veja o que mudou: git status e git diff HEAD (o que não foi commitado, inclusive arquivos novos).';
+  const goal = task.briefing ? ` Objetivo da tarefa: ${task.briefing}` : '';
+  const ask = `Revisão cruzada: esta tarefa foi feita por ${author}, e você é o revisor.${goal} ${changes} `
+    + 'Procure bugs, casos de borda, regressões, falhas de segurança e código fora do padrão do projeto; rode os testes se houver. '
+    + 'Não altere nenhum arquivo nem faça commit: só relate. Termine com uma lista priorizada (bloqueante, importante, menor), '
+    + 'cada item com arquivo:linha e o porquê.';
+  openTerminal({ cwd: task.wt?.path || task.project.path, agent: kind, profileId: defaultProfile(kind)?.id, briefing: ask });
+}
+
+// Dá pra revisar: há mudança e nenhum agente da tarefa está no meio de um turno.
+const reviewable = (task) => task.project.isRepo !== false && (task.ahead || task.dirty || task.stat?.files)
+  && !task.agents.some((a) => a.state === 'busy' || a.state === 'waiting');
 
 async function removeWorktree(project, wt) {
   if (!confirm(`Remover a worktree ${wt.branch}?\n\nA branch continua existindo. Se houver mudança não commitada, o git recusa.`)) return;
@@ -1761,6 +1792,8 @@ function paletteCommands() {
     add('Tarefa', task.name, () => (agent ? activate(agent.tab) : taskActions.openAgent(task)),
       [where, agent ? STATE_LABEL[agent.state] || 'no prompt' : 'sem agente'].join(' · '));
     if (task.wt) add('Diff', task.name, () => taskActions.diff(task), where);
+    const reviewer = taskActions.reviewer(task);
+    if (reviewer) add('Revisar', `${task.name} com ${reviewer}`, () => reviewTask(task), where);
     if (task.wt) add('Concluir', task.name, () => taskActions.conclude(task), where);
   }
   for (const item of state.backlog || []) {

@@ -48,7 +48,11 @@ AGENT_DECK_SMOKE=/caminho/saida npm start
 - **Criar**: "+ nova tarefa" pede nome, **base** (de onde sai e para onde volta) e um **briefing** opcional.
   No Claude, o briefing é enviado como primeira mensagem assim que ele chega no prompt, depois do diálogo
   "trust this folder" (o sinal é o arquivo de sessão, que só nasce após o diálogo). No Codex, que não
-  publica status, ele vai para a área de transferência.
+  publica quando chega no prompt, ele vai como argumento do comando (`codex '<briefing>'`, numa linha só, entre
+  aspas simples do PowerShell).
+- **⇄ Revisão cruzada**: no card de uma tarefa com mudanças e agentes parados, `⇄ GPT` (ou `⇄ Claude`) abre o *outro*
+  modelo na mesma pasta com um pedido de revisão: objetivo da tarefa, como ver o diff desde a base (ou o que está sem
+  commit, nos cards "(raiz)"), e a ordem de não alterar nada e terminar com uma lista priorizada. Também na paleta.
 - Base e briefing ficam no próprio git: `branch.<b>.deckbase` e `branch.<b>.description`.
 - **Sidebar**: `↑N` = commits à frente da base, `●N` = arquivos sem commit. Botões no hover.
 - **± Diff**: tudo que a tarefa mudou desde a base, commitado ou não, no diff do Monaco.

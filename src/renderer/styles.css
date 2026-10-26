@@ -298,7 +298,7 @@ dialog { width: 480px; }
 .ctx-tag { flex: none; font-size: 9px; padding: 0 3px; border-radius: 3px; font-variant-numeric: tabular-nums; }
 .ctx-tag.warm { color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .ctx-tag.hot { color: var(--danger); background: color-mix(in srgb, var(--danger) 22%, transparent); font-weight: 600; }
-.card footer { display: flex; align-items: center; gap: 5px; }
+.card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .card footer button { font-size: 11px; padding: 0 6px; }
 
 /* última fala do agente no card */

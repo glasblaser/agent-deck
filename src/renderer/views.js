@@ -109,6 +109,7 @@ export function mainAgent(task) {
 
 function card(task, actions, h) {
   const agent = mainAgent(task);
+  const reviewer = actions.reviewer?.(task);
   const said = agent?.lastMessage;
   return h('article', {
     ...draggable({ kind: 'task', task }),
@@ -141,6 +142,8 @@ function card(task, actions, h) {
     !task.agents.length && task.lastCommitAt ? h('span', { class: 'muted small' }, `commit ${ago(task.lastCommitAt)}`) : null,
     h('span', { class: 'spacer' }),
     h('button', { title: 'Abrir a pasta no Explorer', onclick: (e) => { e.stopPropagation(); actions.folder(task); } }, '📂'),
+    reviewer ? h('button', { title: `Revisão cruzada: abre o ${reviewer} nesta pasta para revisar o que mudou, sem alterar nada`,
+      onclick: (e) => { e.stopPropagation(); actions.review(task); } }, `⇄ ${reviewer}`) : null,
     task.agents.length ? null : h('button', { title: 'Abrir Claude nessa tarefa', onclick: (e) => { e.stopPropagation(); actions.openAgent(task); } }, 'Abrir Claude'),
     // Agente direto na pasta do projeto: não há worktree para concluir; o fim é fechar os agentes.
     !task.wt && task.agents.length ? h('button', { title: 'Fechar os agentes dessa pasta (o trabalho já está nos arquivos)', onclick: (e) => { e.stopPropagation(); actions.endRoot(task); } }, '■ Encerrar') : null,
