@@ -155,7 +155,9 @@ function registerIpc() {
   handle('tasks:updateBacklog', (id, item) => store.updateBacklog(id, item || {}));
   handle('tasks:removeBacklog', (id) => store.removeBacklog(id));
   handle('tasks:removeDone', (id) => store.removeDone(id));
-  handle('git:finishTask', (projectPath, worktreePath) => git.finishTask(store.requireProjectPath(projectPath), worktreePath));
+  handle('agents:dismiss', (sessionId) => store.dismissConversation(sessionId));
+  handle('git:finishTask', (projectPath, worktreePath, base) => git.finishTask(store.requireProjectPath(projectPath), worktreePath, base));
+  handle('git:concludeInfo', (projectPath, worktreePath) => git.concludeInfo(store.requireProjectPath(projectPath), worktreePath));
 
   handle('pty:spawn', (opts) => {
     const profile = opts.profileId ? store.profile(opts.profileId) : null;

@@ -9,7 +9,9 @@ const { slug } = require('./store');
 
 function exec(exe, cwd, args) {
   return new Promise((resolve, reject) => {
-    execFile(exe, args, { cwd, windowsHide: true, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // Sem prompt de senha no terminal invisível (travaria): o login vem do Git Credential Manager, que abre janela própria.
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    execFile(exe, args, { cwd, env, windowsHide: true, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(Object.assign(new Error((stderr || error.message).trim()), { code: error.code }));
       else resolve(stdout);
     });
@@ -168,7 +170,7 @@ async function createWorktree(projectPath, taskName, { base, briefing, copy } = 
 // Worktree tem que ser uma das listadas pelo git para esse projeto (e criada pelo app, se managed).
 async function requireWorktree(projectPath, worktreePath, managed = false) {
   const found = (await rawWorktrees(projectPath)).find((w) => canonical(w.path) === canonical(worktreePath));
-  if (!found || canonical(found.path) === canonical(projectPath)) throw new Error('Worktree não encontrada nesse projeto.');
+  if (!found || canonical(found.path) === canonical(projectPath)) throw new Error('Essa tarefa não existe mais (já foi concluída ou removida). O quadro foi atualizado.');
   if (managed && !isManaged(projectPath, found.path)) throw new Error('Só mexo em worktrees criadas pelo app.');
   if (!found.branch || found.branch === '(detached)') throw new Error('A worktree não está numa branch.');
   return found;
@@ -216,68 +218,156 @@ async function alreadyIn(cwd, base, branch) {
   return !!merged && merged.split(/\r?\n/)[0] === (await quiet(cwd, ['rev-parse', `${base}^{tree}`]));
 }
 
-// Concluir: commita o que sobrou (se veio mensagem) e integra na base.
-// merge/squash rodam na pasta onde a base está em checkout; pr empurra a branch e abre o PR no GitHub.
-// Não remove a worktree: as abas dela precisam fechar antes (no Windows, pasta em uso não sai). Isso é o finishTask.
-async function conclude(projectPath, worktreePath, { mode, message } = {}) {
-  if (!['merge', 'squash', 'pr'].includes(mode)) throw new Error('Modo inválido.');
-  const wt = await requireWorktree(projectPath, worktreePath, true);
-  const base = await requireBranch(projectPath, await taskBase(projectPath, wt.branch));
+// Remotos do projeto, com o link de "abrir pull request" de cada um (GitHub e Azure DevOps).
+async function remotes(projectPath) {
+  const out = await quiet(projectPath, ['remote', '-v']);
+  const seen = new Map();
+  for (const line of out.split(/\r?\n/)) {
+    const [name, url] = line.split(/\s+/);
+    if (name && url && !seen.has(name)) seen.set(name, { name, url: url.replace(/\/\/[^/@]+@/, '//') });
+  }
+  return [...seen.values()];
+}
+
+function prUrl(remoteUrl, base, branch) {
+  const enc = encodeURIComponent;
+  let m = /github\.com[:/]([^/]+)\/(.+?)(\.git)?$/.exec(remoteUrl);
+  // O GitHub quer a barra das branches (task/x) literal no caminho.
+  const ref = (b) => enc(b).replace(/%2F/g, '/');
+  if (m) return `https://github.com/${m[1]}/${m[2]}/compare/${ref(base)}...${ref(branch)}?expand=1`;
+  m = /dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+?)(\.git)?$/.exec(remoteUrl)
+    || /ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(\.git)?$/.exec(remoteUrl);
+  if (m) return `https://dev.azure.com/${m[1]}/${m[2]}/_git/${m[3]}/pullrequestcreate?sourceRef=${enc(branch)}&targetRef=${enc(base)}`;
+  m = /([^/.]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/]+?)(\.git)?$/.exec(remoteUrl);
+  if (m) return `https://dev.azure.com/${m[1]}/${m[2]}/_git/${m[3]}/pullrequestcreate?sourceRef=${enc(branch)}&targetRef=${enc(base)}`;
+  return null;
+}
+
+// Tudo que a caixa de concluir precisa: base sugerida, branches, remotos e o que há para integrar.
+async function concludeInfo(projectPath, worktreePath) {
+  const wt = await requireWorktree(projectPath, worktreePath);
+  const [base, list, remoteList, status] = await Promise.all([
+    taskBase(projectPath, wt.branch),
+    run(projectPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']),
+    remotes(projectPath),
+    quiet(wt.path, ['status', '--porcelain']),
+  ]);
+  const branchList = list.split(/\r?\n/).filter((b) => b && b !== wt.branch);
+  const ahead = base ? Number(await quiet(projectPath, ['rev-list', '--count', `${base}..${wt.branch}`, '--'])) || 0 : 0;
+  const upstream = base ? await quiet(projectPath, ['config', '--get', `branch.${base}.remote`]) : '';
+  return {
+    branch: wt.branch, base, branches: branchList, remotes: remoteList.map((r) => r.name), upstream,
+    ahead, dirty: status ? status.split(/\r?\n/).length : 0, managed: isManaged(projectPath, wt.path),
+    description: await quiet(projectPath, ['config', '--get', `branch.${wt.branch}.description`]),
+  };
+}
+
+// Erro do git em português, com o que fazer.
+function explainPush(remote, branch, error) {
+  const msg = error.message;
+  if (/rejected|non-fast-forward|fetch first/i.test(msg)) return `${remote} tem commits em ${branch} que você não tem aqui. Rode "git pull ${remote} ${branch}" na pasta do projeto e conclua de novo.`;
+  if (/Authentication|could not read Username|403|401|terminal prompts disabled/i.test(msg)) return `O ${remote} pediu login e ele não aconteceu. Faça um push qualquer por um terminal uma vez (o Git Credential Manager guarda o login) e tente de novo.`;
+  return `Falha ao enviar para ${remote}: ${msg}`;
+}
+
+// Concluir em um passo (o merge/squash não remove a worktree: as abas dela fecham antes, no finishTask). base: onde integrar. push: remotos para enviar (vazio = só local). pr: em vez de
+// integrar aqui, envia a branch da tarefa e devolve o link do pull request de cada remoto.
+// Sem a base aberta em nenhuma pasta, integra numa worktree temporária e apaga ela no fim.
+async function conclude(projectPath, worktreePath, { base: chosenBase, push = [], pr = false, squash = false, message } = {}) {
+  const wt = await requireWorktree(projectPath, worktreePath);
+  const base = await requireBranch(projectPath, chosenBase || (await taskBase(projectPath, wt.branch)));
+  const known = (await remotes(projectPath)).map((r) => r.name);
+  const targets = [].concat(push).filter(Boolean);
+  for (const r of targets) if (!known.includes(r)) throw new Error(`Remoto desconhecido: ${r}`);
+  if (pr && !targets.length) throw new Error('Escolha para qual git abrir o pull request.');
   const description = await quiet(projectPath, ['config', '--get', `branch.${wt.branch}.description`]);
 
   if (await quiet(wt.path, ['status', '--porcelain'])) {
-    if (!message) throw new Error('A worktree tem mudanças não commitadas. Informe a mensagem do commit.');
+    const text = (message || description.split(/\r?\n/)[0] || wt.branch).trim();
     await run(wt.path, ['add', '-A']);
-    await run(wt.path, ['commit', '-m', message]);
+    await run(wt.path, ['commit', '-m', text]);
   }
   const ahead = Number(await quiet(projectPath, ['rev-list', '--count', `${base}..${wt.branch}`, '--'])) || 0;
   if (!ahead) return { mode: 'nothing', branch: wt.branch, base };
-
   const title = (message || description.split(/\r?\n/)[0] || wt.branch).trim();
-  if (mode === 'pr') {
-    await run(wt.path, ['push', '-u', 'origin', wt.branch]);
-    const body = [description, `Branch \`${wt.branch}\` → \`${base}\`.`].filter(Boolean).join('\n\n');
-    let out;
-    try {
-      out = await exec('gh', wt.path, ['pr', 'create', '--base', base, '--head', wt.branch, '--title', title, '--body', body]);
-    } catch (error) {
-      if (error.code === 'ENOENT') throw new Error('A branch foi enviada, mas o GitHub CLI (gh) não está instalado para abrir o PR.');
-      throw error;
+
+  if (pr) {
+    const urls = [];
+    for (const remote of targets) {
+      try {
+        await run(wt.path, ['push', '-u', remote, wt.branch]);
+      } catch (error) {
+        throw new Error(explainPush(remote, wt.branch, error));
+      }
+      const url = prUrl((await remotes(projectPath)).find((r) => r.name === remote).url, base, wt.branch);
+      if (url) urls.push(url);
     }
-    return { mode, branch: wt.branch, base, description, url: out.match(/https:\/\/\S+/)?.[0] || null };
+    return { mode: 'pr', branch: wt.branch, base, description, url: urls[0] || null, urls, pushed: targets };
   }
 
-  const target = (await rawWorktrees(projectPath)).find((w) => w.branch === base);
-  if (!target) throw new Error(`A base ${base} não está em checkout em nenhuma pasta. Faça checkout dela no projeto e tente de novo.`);
   try {
     await run(projectPath, ['merge-tree', '--write-tree', '--name-only', base, wt.branch]);
   } catch (error) {
-    throw new Error(`Conflito entre ${wt.branch} e ${base}. Peça ao agente para rodar "git merge ${base}" na tarefa, resolver e commitar.\n\n${error.message}`);
+    throw Object.assign(new Error(`${wt.branch} e ${base} mexeram nas mesmas linhas (conflito).`), { conflict: true });
   }
-  if (await quiet(target.path, ['diff', '--cached', '--name-only'])) {
-    throw new Error(`Há mudanças em stage em ${target.path}; elas entrariam no commit da tarefa. Resolva antes.`);
+
+  let target = (await rawWorktrees(projectPath)).find((w) => w.branch === base);
+  let temp = null;
+  if (!target) {
+    temp = path.join(`${projectPath}.worktrees`, `.integrar-${Date.now()}`);
+    await run(projectPath, ['worktree', 'add', temp, base]);
+    target = { path: temp, branch: base };
   }
   try {
-    if (mode === 'merge') {
-      await run(target.path, ['merge', '--no-ff', '-m', `Merge ${wt.branch}: ${title}`, wt.branch]);
-    } else {
-      await run(target.path, ['merge', '--squash', wt.branch]);
-      await run(target.path, ['commit', '-m', [title, description !== title ? description : ''].filter(Boolean).join('\n\n')]);
+    if (await quiet(target.path, ['diff', '--cached', '--name-only'])) {
+      throw new Error(`A pasta ${target.path} (em ${base}) tem arquivos em stage; eles entrariam no commit. Faça commit ou tire do stage e tente de novo.`);
     }
-  } catch (error) {
-    // Nunca deixa a pasta da base no meio de um merge.
-    await quiet(target.path, ['reset', '--merge']);
-    throw error;
+    try {
+      if (squash) {
+        await run(target.path, ['merge', '--squash', wt.branch]);
+        await run(target.path, ['commit', '-m', [title, description !== title ? description : ''].filter(Boolean).join('\n\n')]);
+      } else {
+        await run(target.path, ['merge', '--no-ff', '-m', `Merge ${wt.branch}: ${title}`, wt.branch]);
+      }
+    } catch (error) {
+      // Nunca deixa a pasta da base no meio de um merge.
+      await quiet(target.path, ['reset', '--merge']);
+      if (/would be overwritten|untracked working tree files/i.test(error.message)) {
+        throw new Error(`A pasta ${target.path} tem mudanças sem commit nos mesmos arquivos da tarefa. Faça commit delas (ou descarte) e conclua de novo.`);
+      }
+      throw error;
+    }
+  } finally {
+    if (temp) await quiet(projectPath, ['worktree', 'remove', '--force', temp]);
   }
-  return { mode, branch: wt.branch, base, description, into: target.path };
+
+  const pushed = [];
+  const failed = [];
+  for (const remote of targets) {
+    try {
+      await run(projectPath, ['push', remote, base]);
+      pushed.push(remote);
+    } catch (error) {
+      failed.push(explainPush(remote, base, error));
+    }
+  }
+  return { mode: squash ? 'squash' : 'merge', branch: wt.branch, base, description, into: target.path, pushed, failed };
 }
 
 // Fim da tarefa: remove a worktree (sem --force: com mudança não commitada, o git recusa) e
 // apaga a branch se tudo dela já está na base. Senão a branch fica, e a resposta diz isso.
-async function finishTask(projectPath, worktreePath) {
-  const wt = await requireWorktree(projectPath, worktreePath, true);
-  const base = await taskBase(projectPath, wt.branch);
-  await run(projectPath, ['worktree', 'remove', wt.path]);
+// base: a escolhida ao concluir (pode não ser a gravada). Worktree de fora do app (ex.: do Claude Code)
+// também sai; travada (lock), fica e a resposta diz.
+async function finishTask(projectPath, worktreePath, chosenBase) {
+  const wt = await requireWorktree(projectPath, worktreePath);
+  const base = chosenBase || (await taskBase(projectPath, wt.branch));
+  try {
+    await run(projectPath, ['worktree', 'remove', wt.path]);
+  } catch (error) {
+    if (/locked/i.test(error.message)) return { branch: wt.branch, branchKept: true, worktreeKept: 'travada (o Claude Code ainda usa)' };
+    if (/modified or untracked/i.test(error.message)) return { branch: wt.branch, branchKept: true, worktreeKept: 'tem arquivos sem commit' };
+    throw error;
+  }
   if (!base || !(await alreadyIn(projectPath, base, wt.branch))) return { branch: wt.branch, branchKept: true };
   await run(projectPath, ['branch', '-D', wt.branch]);
   return { branch: wt.branch, branchKept: false };
@@ -292,4 +382,4 @@ async function removeWorktree(projectPath, worktreePath) {
   await run(projectPath, ['worktree', 'remove', target]);
 }
 
-module.exports = { listWorktrees, branches, createWorktree, suggestSetup, diff, diffFile, conclude, finishTask, removeWorktree };
+module.exports = { listWorktrees, branches, createWorktree, suggestSetup, diff, diffFile, conclude, concludeInfo, finishTask, removeWorktree };

@@ -56,10 +56,14 @@ AGENT_DECK_SMOKE=/caminho/saida npm start
   ex.: `.env`, `appsettings.Development.json`) e um comando digitado no terminal da tarefa antes do agente
   (`npm ci`, `dotnet restore`…). Na primeira vez vem com sugestão (ignorados na raiz do projeto, comando pelo
   lockfile/`.sln`/`.csproj`). Daí em diante, a nova tarefa oferece "Preparar a worktree".
-- **✓ Concluir**: commita o que sobrou (pede a mensagem), checa conflito antes (`git merge-tree`) e faz
-  merge `--no-ff`, squash ou PR (`git push` + `gh pr create`). Em merge/squash, fecha as abas da tarefa,
-  remove a worktree e apaga a branch, mas só se tudo dela já estiver na base. Se der conflito, nada é tocado
-  e a mensagem diz o que pedir ao agente. PR deixa a worktree; conclua de novo depois do merge para limpar.
+- **✓ Concluir** (ou arrastar o card para "Concluídas"): uma caixa só — em qual branch integrar, para onde enviar
+  (nenhum remoto, um, ou todos) e merge ou squash; ou pull request em um/todos os remotos (envia a branch da tarefa e
+  abre a página de "novo PR" do GitHub / Azure DevOps; não precisa do `gh`). Antes, commita o que sobrou. Se a base não
+  está aberta em nenhuma pasta, integra numa worktree temporária. Vale também para worktrees criadas fora do app
+  (ex.: `.claude/worktrees` do Claude Code). Se der conflito, nada é tocado e ele oferece mandar o agente da tarefa
+  juntar a base e resolver. No fim, fecha as abas, remove a worktree e apaga a branch se ela já estiver toda na base.
+- **Arrastar cards**: A fazer → qualquer coluna ativa começa a tarefa; uma tarefa → "Pra revisar" abre o diff,
+  → "Trabalhando"/"Esperando você" abre ou foca o agente, → "Concluídas" conclui (ou encerra uma "(raiz)").
 
 Teste do ciclo (cria repo descartável, abre Claude de verdade com briefing, diff, concluir):
 `AGENT_DECK_SMOKE=<pasta curta> AGENT_DECK_SMOKE_TASK=1 npm start`. Use pasta curta: o git no Windows
@@ -107,7 +111,10 @@ tarefa "(raiz)" dele. No Codex, estado e última fala vêm do arquivo de rollout
 - **Reabrir**: ao abrir, o app recria as abas da última vez. Claude volta com `claude --resume <id>`
   (cada aba na sua conversa; o app abre cada uma com `--session-id` próprio). Sem nenhuma mensagem
   enviada, não há conversa em disco e abre uma nova. Codex volta com `codex resume <id>` quando o id
-  foi descoberto. O que estava rodando no momento de fechar é interrompido.
+  foi descoberto. O que estava rodando no momento de fechar é interrompido. No quadro, "Conversas fechadas"
+  lista as dos últimos dias; o × tira uma da lista de vez (ela continua no histórico do Claude).
+- **Bolinha da aba** = estado do agente: vazada parado, amarela pulsando trabalhando, vermelha pulsando esperando
+  você, verde terminou. Outras abas mostram um ícone (`>_` terminal, ✎ editor, ± diff, ▦ quadro); a do Codex tem a etiqueta "GPT".
 - **Entre agentes**: botão direito num terminal → "Enviar seleção/área de transferência para" outra aba de
   agente. Cola no prompt (bracketed paste), sem Enter. No Claude, selecione com Shift+arrastar.
   Abas de Claude da **mesma conta** também conversam nativamente (`ListAgents`/`SendMessage` do Claude Code).

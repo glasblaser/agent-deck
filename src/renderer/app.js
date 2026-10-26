@@ -1,7 +1,7 @@
 // UI do Agent Deck: sidebar (projetos/worktrees, contas/uso) e abas (terminal, editor, navegador).
 import { Terminal } from '/xterm/lib/xterm.mjs';
 import { FitAddon } from '/xterm-fit/lib/addon-fit.mjs';
-import { renderBoard, mainAgent } from './views.js';
+import { renderBoard, mainAgent, isDragging } from './views.js';
 import { openPalette } from './palette.js';
 
 const deck = window.deck;
@@ -289,6 +289,16 @@ const stateText = (tab) => {
   return state === 'waiting' && tab.waitingFor ? `esperando você: ${tab.waitingFor}` : STATE_LABEL[state] || '';
 };
 
+// Agente: bolinha de estado (cinza parado, amarela pulsando trabalhando, vermelha esperando você, verde terminou).
+// Outras abas: ícone do que elas são.
+const TAB_ICON = { shell: '>_', editor: '✎', browser: '◍', diff: '±', view: '▦' };
+const MARK_TEXT = { busy: 'trabalhando', waiting: 'esperando você', done: 'terminou', idle: 'parado, no prompt' };
+function tabMark(tab) {
+  if (!tab.isAgent) return h('span', { class: 'tab-icon' }, TAB_ICON[tab.kindClass] || '•');
+  const st = tab.exited || tab.status === 'off' ? 'off' : agentState(tab) || 'idle';
+  return h('span', { class: `dot state-${st}`, title: MARK_TEXT[st] || 'encerrado' });
+}
+
 function renderTabs() {
   $('#tabs').replaceChildren(...tabs.map((tab) =>
     h('div', {
@@ -302,13 +312,14 @@ function renderTabs() {
       onclick: () => activate(tab),
       onauxclick: (e) => e.button === 1 && closeTab(tab),
     },
-    h('span', { class: `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}` }),
+    tabMark(tab),
     h('span', { class: 'label' }, tab.shortTitle || tab.title),
+    tab.kindClass === 'codex' ? h('span', { class: 'kind-tag', title: 'Codex (GPT)' }, 'GPT') : null,
     tab.pinned ? null : h('button', { class: 'close', title: 'Fechar', onclick: (e) => { e.stopPropagation(); closeTab(tab); } }, '×'))));
   for (const tab of tabs) {
     tab.headLabel.textContent = tab.title;
     tab.headLabel.title = tab.tooltip || tab.title;
-    tab.headDot.className = `dot ${tab.kindClass || ''} ${tab.status === 'busy' ? 'busy' : ''}`;
+    tab.headDot.replaceWith(tab.headDot = tabMark(tab));
     const account = tabProfile(tab);
     tab.frame.style.setProperty('--account', account ? profileColor(account) : 'transparent');
     tab.headStatus.textContent = stateText(tab);
@@ -754,8 +765,7 @@ async function openDiff(projectPath, worktreePath, slot) {
   concludeButton.addEventListener('click', () => {
     const project = state.projects.find((p) => p.path === projectPath);
     const wt = (worktreesByProject.get(project?.id) || []).find((w) => isInside(w.path, worktreePath));
-    if (!project || !wt) return toast('Essa worktree não está mais na lista do projeto.');
-    if (!wt.managed) return toast('Worktree criada fora do app: conclua por onde ela foi criada.');
+    if (!project || !wt) return toast('Essa tarefa não existe mais (já foi concluída ou removida).');
     concludeTask(project, wt);
   });
 
@@ -891,7 +901,7 @@ function projectInUse(project) {
     || (worktreesByProject.get(project.id) || []).length > 0
     || tabs.some((t) => inside(t.cwd))
     || (state.backlog || []).some((b) => b.projectId === project.id)
-    || recentConversations.some((c) => inside(c.cwd));
+    || recentConversations.some((c) => inside(c.cwd) && !(state.dismissed || []).includes(c.sessionId));
 }
 
 let othersOpen = false;
@@ -938,7 +948,7 @@ function projectBlock(project) {
         agentButtons(wt.path),
         h('span', { class: 'actions' },
           h('button', { title: 'Revisar o que a tarefa mudou (diff)', onclick: () => openDiff(project.path, wt.path) }, '±'),
-          wt.managed ? h('button', { title: 'Concluir tarefa: integrar na base e limpar', onclick: () => concludeTask(project, wt) }, '✓') : null),
+          h('button', { title: 'Concluir tarefa: integrar, enviar e limpar', onclick: () => concludeTask(project, wt) }, '✓')),
         wt.managed
           ? h('button', { class: 'ghost', title: 'Remover worktree', onclick: () => removeWorktree(project, wt) }, '×')
           : h('span', { class: 'external muted small', title: `Criada fora do app (${wt.path}); remova por onde ela foi criada.` }, 'externa')))));
@@ -1058,7 +1068,27 @@ const taskActions = {
     if (next) setBoardData(next);
   },
   openUrl: (url) => openBrowser(url),
+  // Card solto numa coluna: faz o que a coluna significa, perguntando o que faltar.
+  drop: (drag, column) => {
+    if (drag.kind === 'todo') {
+      if (column === 'finished') return toast('Essa tarefa nem começou. Para tirar da fila, use o ×.');
+      if (column !== 'todo') return taskActions.startTodo(drag.item);
+      return;
+    }
+    const task = drag.task;
+    const agent = mainAgent(task);
+    if (column === 'finished') return task.wt ? concludeTask(task.project, task.wt) : taskActions.endRoot(task);
+    if (column === 'review') return task.wt ? openDiff(task.project.path, task.wt.path) : toast('Agente na pasta do projeto não tem diff de tarefa.');
+    if (column === 'busy' || column === 'waiting') return agent ? activate(agent.tab) : taskActions.openAgent(task);
+    if (column === 'todo') return toast('Tarefa em andamento não volta para a fila.');
+  },
   reopen: (c) => reopenConversation(c),
+  dismiss: async (c) => {
+    const next = await attempt(() => deck.agents.dismiss(c.sessionId));
+    if (!next) return;
+    state.dismissed = next.dismissed;
+    renderProjects();
+  },
   chooseProject: (item) => editTodo(item),
   endRoot: (task) => {
     const running = task.agents.filter((a) => ['busy', 'waiting'].includes(a.state)).length;
@@ -1091,8 +1121,8 @@ async function refreshRecent() {
 
 // Recentes que não estão abertas em nenhuma aba (uma por conversa).
 function recentClosed() {
-  const open = new Set(tabs.map((t) => t.sessionId).filter(Boolean));
-  return recentConversations.filter((c) => !open.has(c.sessionId)).slice(0, 8).map((c) => ({
+  const hidden = new Set([...tabs.map((t) => t.sessionId).filter(Boolean), ...(state.dismissed || [])]);
+  return recentConversations.filter((c) => !hidden.has(c.sessionId)).slice(0, 8).map((c) => ({
     ...c,
     project: state.projects.find((p) => isInside(c.cwd, p.path) || isInside(c.cwd, `${p.path}.worktrees`)) || null,
     account: profileById(c.profileId),
@@ -1163,6 +1193,8 @@ const liveViews = new Set();
 let viewsQueued = false;
 function refreshViews() {
   if (viewsQueued || !liveViews.size) return;
+  // Redesenhar no meio de um arraste cancela o arraste: tenta de novo daqui a pouco.
+  if (isDragging()) return void setTimeout(refreshViews, 500);
   viewsQueued = true;
   requestAnimationFrame(() => {
     viewsQueued = false;
@@ -1316,7 +1348,7 @@ async function newTask(project, preset = {}) {
 
 // Fecha as abas da tarefa e remove worktree + branch. As abas saem antes: no Windows, pasta que
 // é cwd de um shell não pode ser apagada. O shell demora um pouco a soltar, daí as tentativas.
-async function finishTask(project, wt) {
+async function finishTask(project, wt, base) {
   const here = tabs.filter((t) => t.cwd && isInside(t.cwd, wt.path));
   for (const t of here) closeTab(t, { quiet: true });
   if (here.some((t) => tabs.includes(t))) return toast('Feche as abas da tarefa para remover a worktree.');
@@ -1324,7 +1356,7 @@ async function finishTask(project, wt) {
   for (let i = 0; i < 6 && !result; i += 1) {
     if (i) await new Promise((r) => setTimeout(r, 700));
     try {
-      result = await deck.git.finishTask(project.path, wt.path);
+      result = await deck.git.finishTask(project.path, wt.path, base);
     } catch (error) {
       if (i === 5 || /modified or untracked/.test(error.message)) {
         toast(errorText(error));
@@ -1337,54 +1369,101 @@ async function finishTask(project, wt) {
   return result;
 }
 
+// Concluir numa caixa só: onde integrar, para qual git enviar (um, todos ou nenhum) e como.
+// Conflito não é beco sem saída: oferece mandar o agente da tarefa resolver.
 async function concludeTask(project, wt) {
-  await loadWorktrees(project);
-  renderProjects();
-  wt = (worktreesByProject.get(project.id) || []).find((w) => isInside(w.path, wt.path)) || wt;
-  if (!wt.ahead && !wt.dirty) {
-    if (!confirm(`${wt.branch} não tem nada além de ${wt.base}. Fechar as abas dela e remover worktree e branch?`)) return;
-    const done = await finishTask(project, wt);
-    if (done) toast(`${wt.branch} removida.`, 'info');
-    return;
-  }
-  const fields = [{
-    name: 'mode', label: `Integrar ${wt.branch} em ${wt.base}`, type: 'select', value: 'merge',
-    options: [
-      { value: 'merge', label: 'Merge local (mantém os commits)' },
-      { value: 'squash', label: 'Squash local (um commit só)' },
-      { value: 'pr', label: 'Pull request no GitHub (push + gh pr create)' },
-    ],
-  }];
-  if (wt.dirty) {
-    fields.push({
-      name: 'message', label: `${wt.dirty} arquivo(s) sem commit: entram num commit com a mensagem`,
-      value: wt.description?.split('\n')[0] || '', required: true,
-    });
-  }
-  const values = await form(`Concluir ${wt.branch}`, fields, 'Concluir');
-  if (!values) return;
-  const res = await attempt(() => deck.git.conclude(project.path, wt.path, values));
-  if (res && res.mode !== 'nothing') {
-    const fresh = await attempt(() => deck.state());
-    if (fresh) setBoardData(fresh);
-  }
-  if (!res) {
-    // O commit das pendências pode ter entrado antes da falha: atualiza os contadores.
+  const info = await attempt(() => deck.git.concludeInfo(project.path, wt.path));
+  if (!info) {
     await loadWorktrees(project);
     return renderProjects();
   }
+  if (!info.ahead && !info.dirty) {
+    if (!confirm(`${info.branch} não tem nada além de ${info.base}. Fechar as abas dela e remover a worktree?`)) return;
+    const done = await finishTask(project, wt, info.base);
+    if (done) toast(`${info.branch} removida.`, 'info');
+    return;
+  }
+  const all = info.remotes.join(' e ');
+  const fields = [
+    {
+      name: 'base', label: 'Integrar em', type: 'select', value: info.base,
+      options: info.branches.map((b) => ({ value: b, label: b === info.base ? `${b} (de onde a tarefa saiu)` : b })),
+    },
+    {
+      name: 'dest', label: 'Enviar para', type: 'select', value: 'local',
+      options: [
+        { value: 'local', label: info.remotes.length ? 'Não enviar (fica só neste computador)' : 'Só neste computador (o projeto não tem remoto)' },
+        ...info.remotes.map((r) => ({ value: `push:${r}`, label: `${r}${r === info.upstream ? ' (o remoto da base)' : ''}` })),
+        ...(info.remotes.length > 1 ? [{ value: 'push:*', label: `Todos (${all})` }] : []),
+        ...info.remotes.map((r) => ({ value: `pr:${r}`, label: `Pull request em ${r} (não integra aqui; abre o PR no navegador)` })),
+        ...(info.remotes.length > 1 ? [{ value: 'pr:*', label: `Pull request em todos (${all})` }] : []),
+      ],
+    },
+    {
+      name: 'how', label: 'Histórico', type: 'select', value: 'merge',
+      options: [
+        { value: 'merge', label: 'Manter os commits da tarefa (merge)' },
+        { value: 'squash', label: 'Juntar tudo num commit só (squash)' },
+      ],
+    },
+  ];
+  if (info.dirty) {
+    fields.push({ name: 'message', label: `${info.dirty} arquivo(s) sem commit entram num commit com a mensagem`, value: info.description.split('\n')[0] || '', required: true });
+  }
+  const values = await form(`Concluir ${info.branch.replace(/^task\//, '')}`, fields, 'Concluir');
+  if (!values) return;
+  const [kind, which] = values.dest.split(':');
+  const opts = {
+    base: values.base, message: values.message, squash: values.how === 'squash', pr: kind === 'pr',
+    push: kind === 'local' ? [] : which === '*' ? info.remotes : [which],
+  };
+  let res;
+  try {
+    res = await deck.git.conclude(project.path, wt.path, opts);
+  } catch (error) {
+    const text = errorText(error);
+    await loadWorktrees(project);
+    renderProjects();
+    if (/conflito/.test(text)) {
+      if (confirm(`${text}\n\nMandar o agente da tarefa juntar ${values.base} nela e resolver? Depois é só concluir de novo.`)) resolveWithAgent(project, wt, values.base);
+      return;
+    }
+    return toast(text);
+  }
+  const fresh = await attempt(() => deck.state());
+  if (fresh) setBoardData(fresh);
   if (res.mode === 'pr') {
     await loadWorktrees(project);
     renderProjects();
-    toast(`PR aberto para ${res.branch} → ${res.base}. A worktree fica até o merge; depois conclua de novo para limpar.`, 'info');
-    if (res.url) openBrowser(res.url);
+    for (const url of res.urls) deck.open.external(url);
+    toast(res.urls.length
+      ? `Branch enviada para ${res.pushed.join(' e ')}. O pull request abriu no navegador: confirme lá. Depois do merge, conclua de novo para limpar.`
+      : `Branch enviada para ${res.pushed.join(' e ')}. Abra o pull request pelo site do repositório.`, 'info');
     return;
   }
-  const done = await finishTask(project, wt);
-  if (!done) return toast(`${res.branch} foi integrada em ${res.base}, mas a worktree não saiu. Remova pelo ×.`);
+  const done = await finishTask(project, wt, values.base);
+  const sent = res.pushed?.length ? ` e enviada para ${res.pushed.join(' e ')}` : '';
+  const left = !done ? ' A worktree não saiu: remova pelo ×.'
+    : done.worktreeKept ? ` A worktree ficou: ${done.worktreeKept}.`
+    : done.branchKept ? ' Worktree removida; a branch ficou.' : ' Worktree removida e branch apagada.';
   toast(res.mode === 'nothing'
-    ? `${res.branch} não tinha nada além de ${res.base}. Worktree removida${done.branchKept ? '' : ' e branch apagada'}.`
-    : `${res.branch} integrada em ${res.base}. Worktree removida${done.branchKept ? '; a branch ficou' : ' e branch apagada'}.`, 'info');
+    ? `${res.branch} não tinha nada além de ${res.base}.${left}`
+    : `${res.branch} integrada em ${res.base}${sent}.${left}`, 'info');
+  if (res.failed?.length) setTimeout(() => toast(res.failed.join('\n\n')), 400);
+}
+
+// Conflito: o agente da tarefa junta a base e resolve. Usa o Claude que já está na tarefa (se estiver no prompt)
+// ou abre um novo nela com o pedido.
+function resolveWithAgent(project, wt, base) {
+  const ask = `Antes de integrar esta tarefa em ${base}, rode "git merge ${base}" aqui, resolva os conflitos mantendo o objetivo da tarefa, rode os testes se houver e faça commit. Não faça push.`;
+  const agent = tabs.find((t) => t.isAgent && t.kindClass === 'claude' && t.cwd && isInside(t.cwd, wt.path) && t.status === 'idle' && t.ptyId);
+  if (agent) {
+    agent.term.paste(ask);
+    setTimeout(() => agent.ptyId && deck.pty.write(agent.ptyId, '\r'), 400);
+    activate(agent);
+    return;
+  }
+  openTerminal({ cwd: wt.path, agent: 'claude', profileId: defaultProfile('claude')?.id, briefing: ask });
 }
 
 async function removeWorktree(project, wt) {
@@ -1604,7 +1683,7 @@ function paletteCommands() {
     add('Tarefa', task.name, () => (agent ? activate(agent.tab) : taskActions.openAgent(task)),
       [where, agent ? STATE_LABEL[agent.state] || 'no prompt' : 'sem agente'].join(' · '));
     if (task.wt) add('Diff', task.name, () => taskActions.diff(task), where);
-    if (task.managed) add('Concluir', task.name, () => taskActions.conclude(task), where);
+    if (task.wt) add('Concluir', task.name, () => taskActions.conclude(task), where);
   }
   for (const item of state.backlog || []) {
     add('Começar', item.name, () => taskActions.startTodo(item), state.projects.find((p) => p.id === item.projectId)?.name);

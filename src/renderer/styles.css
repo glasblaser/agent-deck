@@ -206,6 +206,21 @@ body.sidebar-hidden #sidebar { display: none; }
 
 /* status do agente: pulsa trabalhando; "terminou" destaca a aba até ela receber foco */
 .dot.busy { animation: pulse 1.1s ease-in-out infinite; }
+/* estado do agente na aba */
+.dot.state-idle { background: none; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.dot.state-off { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
+.dot.state-busy { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.dot.state-waiting { background: var(--danger); animation: pulse 1.1s ease-in-out infinite; }
+.dot.state-done { background: var(--shell); }
+.tab-icon { flex: none; width: 14px; text-align: center; font-size: 11px; color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; }
+.kind-tag { flex: none; font-size: 9px; letter-spacing: .04em; padding: 0 3px; border-radius: 3px; background: color-mix(in srgb, var(--codex) 25%, transparent); color: var(--codex); }
+.recent-item .dismiss { margin-left: 4px; padding: 0 4px; border-radius: 3px; color: var(--muted); visibility: hidden; }
+.recent-item:hover .dismiss { visibility: visible; }
+.recent-item .dismiss:hover { color: var(--danger); background: var(--panel); }
+/* arrastar cards no quadro */
+.card[draggable] { cursor: grab; }
+.card.dragging { opacity: .45; }
+.column.drop { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 @keyframes pulse { 50% { opacity: .2; } }
 .tab.attention .label { color: var(--accent); font-weight: 600; }
 .tab.attention .dot { box-shadow: 0 0 0 2px var(--accent); }

@@ -28,10 +28,12 @@ contextBridge.exposeInMainWorld('deck', {
     diff: invoke('git:diff'),
     diffFile: invoke('git:diffFile'),
     conclude: invoke('git:conclude'),
+    concludeInfo: invoke('git:concludeInfo'),
     finishTask: invoke('git:finishTask'),
   },
   agents: {
     recent: invoke('agents:recent'),
+    dismiss: invoke('agents:dismiss'),
   },
   tasks: {
     addBacklog: invoke('tasks:addBacklog'),

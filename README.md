@@ -61,10 +61,14 @@ AGENT_DECK_SMOKE=/output/path npm start
   `.env`, `appsettings.Development.json`) and a command typed in the task's terminal before the agent
   (`npm ci`, `dotnet restore`…). The first time it's pre-filled with a suggestion (ignored files at the
   project root, command from the lockfile/`.sln`/`.csproj`). New tasks then offer "Prepare the worktree".
-- **✓ Finish**: commits what's left (asks for the message), checks for conflicts first (`git merge-tree`) and does
-  a `--no-ff` merge, squash, or PR (`git push` + `gh pr create`). On merge/squash it closes the task's tabs,
-  removes the worktree and deletes the branch, but only if everything in it is already in the base. On conflict
-  nothing is touched and the message says what to ask the agent. PR keeps the worktree; finish again after the merge to clean up.
+- **✓ Finish** (or drag the card to "Done"): one dialog — which branch to merge into, where to send it (no remote,
+  one remote, or all of them) and merge vs squash; or a pull request on one/all remotes (pushes the task branch and
+  opens the GitHub / Azure DevOps "new PR" page; no `gh` needed). Commits what's left first. If the base isn't checked
+  out anywhere, it merges in a temporary worktree. Works for worktrees created outside the app too (e.g. Claude Code's
+  `.claude/worktrees`). On conflict nothing is touched and it offers to have the task's agent merge the base and resolve.
+  Afterwards it closes the task's tabs, removes the worktree and deletes the branch if it's fully in the base.
+- **Drag cards**: To-do → any active column starts the task; a task → "To review" opens the diff, → "Working"/"Waiting"
+  opens or focuses its agent, → "Done" finishes it (or ends a "(root)" one).
 
 Full-cycle test (creates a throwaway repo, opens a real Claude with briefing, diff, finish):
 `AGENT_DECK_SMOKE=<short path> AGENT_DECK_SMOKE_TASK=1 npm start`. Use a short path: git on Windows
@@ -111,7 +115,10 @@ project's "(root)" task. For Codex, state and last message come from its rollout
 - **Reopen**: on start, the app recreates the tabs from last time. Claude comes back with `claude --resume <id>`
   (each tab in its own conversation; the app opens each one with its own `--session-id`). With no message
   sent there's no conversation on disk, so a new one opens. Codex comes back with `codex resume <id>` when the id
-  was discovered. Whatever was running when the app closed is interrupted.
+  was discovered. Whatever was running when the app closed is interrupted. On the board, "Closed conversations"
+  lists the last few days' ones; × removes one from the list for good (it stays in Claude's history).
+- **Tab dot** = agent state: hollow idle, pulsing yellow working, pulsing red waiting for you, green done.
+  Other tabs show an icon (`>_` terminal, ✎ editor, ± diff, ▦ board); Codex tabs carry a "GPT" tag.
 - **Between agents**: right-click a terminal → "Send selection/clipboard to" another agent tab. Pastes into
   the prompt (bracketed paste), no Enter. In Claude, select with Shift+drag.
   Claude tabs on the **same account** can also talk natively (Claude Code's `ListAgents`/`SendMessage`).

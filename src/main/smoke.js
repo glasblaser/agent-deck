@@ -131,7 +131,11 @@ module.exports = function smoke(app, win, outDir) {
         await run(`(() => { const i = document.querySelector('#project-filter'); i.value = 'alf'; i.dispatchEvent(new Event('input')); })()`);
         log.push(`barra filtrada "alf": ${await sidebar()}`);
         await run(`(() => { const i = document.querySelector('#project-filter'); i.value = ''; i.dispatchEvent(new Event('input')); })()`);
-        log.push(`conversas fechadas no quadro: ${await run(`JSON.stringify([...document.querySelectorAll(".recent-item strong")].map((e) => e.textContent).slice(0, 4))`)}`);
+        const recentTitles = () => run(`JSON.stringify([...document.querySelectorAll(".recent-item strong")].map((e) => e.textContent).slice(0, 4))`);
+        log.push(`conversas fechadas no quadro: ${await recentTitles()}`);
+        await run(`document.querySelector('.recent-item .dismiss')?.click()`);
+        await sleep(600);
+        log.push(`depois do × na primeira: ${await recentTitles()}`);
         const key = (keyCode, modifiers = []) => {
           win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
           win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
@@ -168,7 +172,16 @@ module.exports = function smoke(app, win, outDir) {
           document.querySelector('#modal-ok').click(); })()`);
         await sleep(800);
         log.push(`fila: ${await run(`JSON.stringify([...document.querySelectorAll('.col-todo .card')].map((c) => c.querySelector('header strong').textContent + ' / ' + c.querySelector('.briefing')?.textContent.slice(0, 30)))`)}`);
-        await run(`document.querySelector('.col-todo .card button.primary').click()`);
+        // Arrastar o card de "A fazer" para "Trabalhando" começa a tarefa (mesmo form do ▶ Começar).
+        await run(`(() => {
+          const card = document.querySelector('.col-todo .card');
+          const col = document.querySelector('.column.col-busy');
+          const dt = new DataTransfer();
+          card.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+          col.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+          col.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+          card.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+        })()`);
         await waitFor('document.querySelector("#modal").open && document.querySelector("#modal-title").textContent.startsWith("Nova tarefa em")');
         log.push(`form: ${await run(`JSON.stringify([...document.querySelectorAll('#modal-fields label')].map((l) => l.querySelector('span').textContent + ' = ' + (l.querySelector('select, input, textarea').value)))`)}`);
         await run(`document.querySelector('#modal-ok').click()`);
@@ -205,6 +218,7 @@ module.exports = function smoke(app, win, outDir) {
               + (k.querySelector('.said') ? ' «' + k.querySelector('.said').textContent.slice(0, 80) + '»' : '')
               + (k.querySelector('.account-tag') ? ' {conta ' + k.querySelector('.account-tag').textContent + ' ' + getComputedStyle(k.querySelector('.account-tag')).backgroundColor + ' / faixa ' + getComputedStyle(k).borderLeftColor + '}' : ''))])))`)}`);
           log.push(`abas com conta: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + ' -> ' + (t.dataset.account ? t.dataset.account + ' ' + getComputedStyle(t).borderBottomColor : 'sem conta')))`)}`);
+          log.push(`marcas das abas: ${await run(`JSON.stringify([...document.querySelectorAll('.tab')].map((t) => t.querySelector('.label').textContent + ' -> ' + (t.querySelector('.dot')?.className || t.querySelector('.tab-icon')?.textContent)))`)}`);
           await shot(`t-quadro-${label}`);
           await run(`document.querySelector('.tab[data-kind="claude"]').click()`);
           await sleep(300);

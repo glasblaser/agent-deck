@@ -151,6 +151,7 @@ function publicState() {
   discover();
   return {
     profiles: state.profiles, home: HOME, backlog: state.backlog || [], done: state.done || [], workspaces: state.workspaces || [],
+    dismissed: state.dismissed || [],
     projects: state.projects.map((p) => ({ ...p, inWorkspace: inWorkspace(p.path) })),
   };
 }
@@ -199,6 +200,14 @@ function recordDone(projectPath, { mode, branch, base, url, description }) {
     briefing: text(description, 2000), at: Date.now(),
   }].slice(-100);
   save();
+}
+
+// Conversa fechada que você não quer mais ver em "Conversas fechadas" (ela continua no Claude, /resume acha).
+function dismissConversation(sessionId) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(sessionId))) throw new Error('Conversa inválida.');
+  state.dismissed = [...new Set([...(state.dismissed || []), sessionId])].slice(-1000);
+  save();
+  return publicState();
 }
 
 function removeDone(id) {
@@ -360,7 +369,7 @@ function requireCwd(target) {
 
 module.exports = {
   load, publicState, profile, addProfile, removeProfile, setProfileColor, addProject, setProjectSetup, setupCommandFor, setupCopyFor, removeProject, getSession,
-  addWorkspace, removeWorkspace, setProjectPinned, saveSession,
+  addWorkspace, removeWorkspace, setProjectPinned, dismissConversation, saveSession,
   addBacklog, updateBacklog, removeBacklog, recordDone, removeDone,
   requireProjectPath, requireAllowedPath, requireCwd, slug, HOME,
 };
