@@ -618,9 +618,10 @@ deck.pty.onStatus((id, info) => {
   if (sessionChanged) saveSession();
 });
 
-deck.pty.onExit((id, code) => {
+deck.pty.onExit((id, code, error) => {
   const entry = terminalsByPty.get(id);
   if (!entry) return;
+  if (error) entry.term.write(`\r\n\x1b[31m[não foi possível abrir o terminal: ${error}]\x1b[0m`);
   entry.term.write(`\r\n\x1b[90m[processo encerrado: ${code}]\x1b[0m\r\n`);
   entry.tab.exited = true;
   entry.tab.ptyId = null;
@@ -1666,6 +1667,7 @@ async function newTabDialog(preset = {}) {
   ], 'Abrir');
   if (!values) return;
   if (values.type === 'browser') return openBrowser();
+  if (!values.cwd || values.cwd === PICK_FOLDER) return toast('Escolha a pasta.');
   if (values.type === 'editor') {
     if (values.cwd === state.home) return toast('O editor só abre pastas de projeto.');
     return openEditor(values.cwd);

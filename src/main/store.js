@@ -361,10 +361,14 @@ function requireAllowedPath(target) {
 }
 
 // Terminais podem abrir também na home (ex.: login de uma conta nova).
+// Só caminho absoluto de pasta que existe: relativo seria resolvido contra a pasta do app, e o ConPTY
+// não sobe em pasta inexistente.
 function requireCwd(target) {
+  if (target && !path.isAbsolute(target)) throw new Error(`Pasta inválida: ${target}`);
   const resolved = path.resolve(target || HOME);
-  if (canonical(resolved) === canonical(HOME)) return resolved;
-  return requireAllowedPath(resolved);
+  if (canonical(resolved) !== canonical(HOME)) requireAllowedPath(resolved);
+  if (!fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`Pasta não encontrada: ${resolved}`);
+  return resolved;
 }
 
 module.exports = {

@@ -94,9 +94,11 @@ function ensureHost() {
     if (msg.type === 'exit') {
       alive.delete(msg.id);
       agents.untrack(msg.id);
-      emit('pty:exit', msg.id, msg.code);
+      emit('pty:exit', msg.id, msg.code, msg.error || null);
     }
   });
+  // Mandar para um host que acabou de cair dá EPIPE; sem este listener vira exceção no processo principal.
+  host.on('error', (err) => console.error('pty-host:', err.message));
   // Se o host cair, todas as abas de terminal são marcadas como encerradas.
   host.on('exit', () => {
     for (const id of alive) {
@@ -134,17 +136,22 @@ function spawn({ cwd, profile, agent, resumeId, prompt, setupCommand, cols = 120
   return { id, shell: path.basename(SHELL), sessionId: launch?.sessionId || null };
 }
 
+// Só envia com o canal aberto; entre a queda do host e o evento 'exit' o send ainda existe, mas falha.
+function toHost(msg) {
+  if (host?.connected) host.send(msg);
+}
+
 function write(id, data) {
-  if (alive.has(id)) host?.send({ type: 'write', id, data });
+  if (alive.has(id)) toHost({ type: 'write', id, data });
 }
 
 function resize(id, cols, rows) {
-  if (alive.has(id) && cols > 0 && rows > 0) host?.send({ type: 'resize', id, cols, rows });
+  if (alive.has(id) && cols > 0 && rows > 0) toHost({ type: 'resize', id, cols, rows });
 }
 
 function kill(id) {
   agents.untrack(id);
-  if (alive.delete(id)) host?.send({ type: 'kill', id });
+  if (alive.delete(id)) toHost({ type: 'kill', id });
 }
 
 // O host mata todos os terminais ao perder a conexão.

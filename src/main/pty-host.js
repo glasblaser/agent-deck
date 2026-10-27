@@ -10,7 +10,14 @@ const send = (msg) => process.connected && process.send(msg);
 process.on('message', (msg) => {
   switch (msg.type) {
     case 'spawn': {
-      const term = pty.spawn(msg.shell, msg.args, { ...msg.options, useConpty: true });
+      // Falha ao subir um terminal derruba só ele, não o host (e com ele todas as outras abas).
+      let term;
+      try {
+        term = pty.spawn(msg.shell, msg.args, { ...msg.options, useConpty: true });
+      } catch (err) {
+        send({ type: 'exit', id: msg.id, code: -1, error: err.message });
+        break;
+      }
       terminals.set(msg.id, term);
       term.onData((data) => send({ type: 'data', id: msg.id, data }));
       term.onExit(({ exitCode }) => {

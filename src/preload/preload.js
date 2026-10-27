@@ -48,7 +48,7 @@ contextBridge.exposeInMainWorld('deck', {
     resize: (id, cols, rows) => ipcRenderer.send('pty:resize', id, cols, rows),
     kill: (id) => ipcRenderer.send('pty:kill', id),
     onData: (fn) => ipcRenderer.on('pty:data', (_e, id, data) => fn(id, data)),
-    onExit: (fn) => ipcRenderer.on('pty:exit', (_e, id, code) => fn(id, code)),
+    onExit: (fn) => ipcRenderer.on('pty:exit', (_e, id, code, error) => fn(id, code, error)),
     onStatus: (fn) => ipcRenderer.on('agent:status', (_e, id, info) => fn(id, info)),
   },
   session: {
