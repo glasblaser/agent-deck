@@ -65,6 +65,19 @@ function isInside(child, parent) {
   return c === p || c.startsWith(`${p}\\`);
 }
 
+// Projetos podem estar um dentro do outro (a pasta-raiz cadastrada como projeto, por exemplo): a pasta
+// pertence ao projeto ou worktree mais fundo que a contém, senão o card do pai engole as abas dos filhos.
+function ownerOf(cwd) {
+  let best = null;
+  for (const project of state.projects) {
+    for (const wt of [null, ...(worktreesByProject.get(project.id) || [])]) {
+      const dir = wt ? wt.path : project.path;
+      if (isInside(cwd, dir) && (!best || dir.length > best.dir.length)) best = { project, wt, dir };
+    }
+  }
+  return best;
+}
+
 // Formulário modal genérico (Electron não tem window.prompt).
 function form(title, fields, okLabel = 'OK') {
   const dialog = $('#modal');
@@ -598,8 +611,7 @@ deck.pty.onStatus((id, info) => {
   if (tab.briefing && info.status === 'idle') deliverBriefing(tab);
   // Parou (terminou ou pediu algo): é quando commits e arquivos mudam; atualiza os contadores da tarefa.
   if (['idle', 'waiting'].includes(info.status) && previous === 'busy') {
-    const project = tab.cwd && state.projects.find((p) => isInside(tab.cwd, p.path)
-      || (worktreesByProject.get(p.id) || []).some((w) => isInside(tab.cwd, w.path)));
+    const project = tab.cwd && ownerOf(tab.cwd)?.project;
     if (project) refreshChanges(project, [tab]);
   }
   renderTabs();
@@ -955,7 +967,7 @@ setInterval(() => {
   if (document.hidden) return;
   for (const project of state.projects) {
     const worktrees = worktreesByProject.get(project.id) || [];
-    const agentTabs = tabs.filter((t) => t.isAgent && t.cwd && (isInside(t.cwd, project.path) || worktrees.some((w) => isInside(t.cwd, w.path))));
+    const agentTabs = tabs.filter((t) => t.isAgent && t.cwd && ownerOf(t.cwd)?.project === project);
     const due = agentTabs.filter((t) => t.status === 'busy'
       || (!rootStatByProject.has(project.id) && !worktrees.some((w) => isInside(t.cwd, w.path))));
     if (due.length) refreshChanges(project, due);
@@ -980,7 +992,7 @@ function projectInUse(project) {
   const inside = (dir) => dir && (isInside(dir, project.path) || isInside(dir, `${project.path}.worktrees`));
   return !!project.pinned
     || (worktreesByProject.get(project.id) || []).length > 0
-    || tabs.some((t) => inside(t.cwd))
+    || tabs.some((t) => t.cwd && (ownerOf(t.cwd)?.project === project || (inside(t.cwd) && !ownerOf(t.cwd))))
     || (state.backlog || []).some((b) => b.projectId === project.id)
     || recentConversations.some((c) => inside(c.cwd) && !(state.dismissed || []).includes(c.sessionId));
 }
@@ -1093,7 +1105,8 @@ function queueProjects() {
 // derivada do estado real. Agentes rodando direto na pasta do projeto viram a "tarefa" raiz dele.
 function taskModel() {
   const list = [];
-  const agentsIn = (match) => tabs.filter((t) => t.isAgent && t.cwd && match(t.cwd))
+  const owners = new Map(tabs.filter((t) => t.isAgent && t.cwd).map((t) => [t, ownerOf(t.cwd)]));
+  const agentsIn = (match) => tabs.filter((t) => owners.get(t) && match(owners.get(t)))
     .map((tab) => {
       const account = tabProfile(tab);
       return { tab, state: agentState(tab), since: tab.statusSince || null, lastMessage: tab.lastMessage || null, context: tab.context || null,
@@ -1107,13 +1120,13 @@ function taskModel() {
   };
   for (const project of state.projects) {
     const worktrees = worktreesByProject.get(project.id) || [];
-    const rootAgents = agentsIn((cwd) => isInside(cwd, project.path) && !worktrees.some((w) => isInside(cwd, w.path)));
+    const rootAgents = agentsIn((o) => o.project === project && !o.wt);
     if (rootAgents.length) {
       list.push({ id: project.path, name: `${project.name} (raiz)`, project, wt: null, briefing: '', agents: rootAgents,
         column: columnOf(rootAgents, false), ahead: 0, dirty: 0, managed: false, stat: rootStatByProject.get(project.id) || null });
     }
     for (const wt of worktrees) {
-      const agents = agentsIn((cwd) => isInside(cwd, wt.path));
+      const agents = agentsIn((o) => o.wt === wt);
       list.push({
         id: wt.path, name: (wt.branch || basename(wt.path)).replace(/^task\//, ''), project, wt,
         briefing: wt.description || '', agents, column: columnOf(agents, wt.ahead || wt.dirty),
